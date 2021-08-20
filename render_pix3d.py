@@ -1,4 +1,6 @@
-# based on https://github.com/weiaicunzai/blender_shapenet_render/blob/master/render_depth.py
+# based on:
+# https://github.com/weiaicunzai/blender_shapenet_render/blob/master/render_depth.py
+# https://github.com/xingyuansun/pix3d/blob/master/demo.py
 
 import os
 import sys
@@ -7,22 +9,12 @@ import math
 import argparse
 
 import bpy
+import mathutils
 
 def camera_location(azimuth, elevation, dist):
-    """get camera_location (x, y, z)
-    you can write your own version of camera_location function
-    to return the camera loation in the blender world coordinates
-    system
-    Args:
-        azimuth: azimuth degree(object centered)
-        elevation: elevation degree(object centered)
-        dist: distance between camera and object(in meter)
-    
-    Returens:
-        return the camera location in world coordinates in meters
-    """
+	# return the camera location in world coordinates in meters
+	# args in degrees/meters (object centered)
 
-    #convert azimuth, elevation degree to radians
     phi = float(elevation) * math.pi / 180 
     theta = float(azimuth) * math.pi / 180
     dist = float(dist)
@@ -46,13 +38,6 @@ def camera_rot_XYZEuler(azimuth, elevation, tilt):
 
     azimuth, elevation, tilt = float(azimuth), float(elevation), float(tilt)
     x, y, z = 90, 0, 90 #set camera at x axis facing towards object
-
-    #twist
-    #if tilt > 0:
-    #    y = tilt
-    #else:
-    #    y = 360 + tilt
-
     #latitude
     x = x - elevation
     #longtitude
@@ -81,56 +66,107 @@ def render_one_view(viewpoint):
 
     bpy.context.scene.frame_set(1 + bpy.context.scene.frame_current)
 
-def init_camera_scene(use_gpu = False, g_engine_type = 'CYCLES', g_resolution_x = 640, g_resolution_y = 480, g_resolution_percentage = 100, g_depth_file_format = 'PNG', g_depth_use_overwrite = True, g_depth_use_file_extension = True, g_depth_clip_start = 0.5, g_depth_clip_end 4.0, g_rotation_mode = 'XYZ', g_hilbert_spiral = 512, g_syn_depth_folder = 'syn_depth'):
+def init_camera_scene_(w=None, h=None, n_samples=None, xyz=(0, 0, 0), rot_vec_rad=(0, 0, 0), name=None, proj_model='PERSP', f=35, sensor_fit='HORIZONTAL', sensor_width=32, sensor_height=18):
+	bpy.ops.object.camera_add()
+    cam = bpy.context.active_object
+
+    if name is not None:
+        cam.name = name
+
+    cam.location = xyz
+    cam.rotation_euler = rot_vec_rad
+
+    cam.data.type = proj_model
+    cam.data.lens = f
+    cam.data.sensor_fit = sensor_fit
+    cam.data.sensor_width = sensor_width
+    cam.data.sensor_height = sensor_height
+
+    scene = bpy.context.scene
+    scene.render.engine = 'CYCLES'
+    cycles = scene.cycles
+
+    cycles.use_progressive_refine = True
+    if n_samples is not None:
+        cycles.samples = n_samples
+    cycles.max_bounces = 100
+    cycles.min_bounces = 10
+    cycles.caustics_reflective = False
+    cycles.caustics_refractive = False
+    cycles.diffuse_bounces = 10
+    cycles.glossy_bounces = 4
+    cycles.transmission_bounces = 4
+    cycles.volume_bounces = 0
+    cycles.transparent_min_bounces = 8
+    cycles.transparent_max_bounces = 64
+
+    # Avoid grainy renderings (fireflies)
+    world = bpy.data.worlds['World']
+    world.cycles.sample_as_light = True
+    cycles.blur_glossy = 5
+    cycles.sample_clamp_indirect = 5
+
+    # Ensure no background node
+    world.use_nodes = True
+    try:
+        world.node_tree.nodes.remove(world.node_tree.nodes['Background'])
+    except KeyError:
+        pass
+
+    scene.render.tile_x = 16
+    scene.render.tile_y = 16
+    if w is not None:
+        scene.render.resolution_x = w
+    if h is not None:
+        scene.render.resolution_y = h
+    scene.render.resolution_percentage = 100
+    scene.render.use_file_extension = True
+    scene.render.image_settings.file_format = 'PNG'
+    scene.render.image_settings.color_mode = 'RGBA'
+    scene.render.image_settings.color_depth = '8'
+
+def init_camera_scene(use_gpu = False, engine_type = 'CYCLES', resolution_x = 640, resolution_y = 480, resolution_percentage = 100, depth_file_format = 'PNG', depth_use_overwrite = True, depth_use_file_extension = True, depth_clip_start = 0.5, depth_clip_end 4.0, rotation_mode = 'XYZ', hilbert_spiral = 512, syn_depth_folder = 'syn_depth'):
     scene = bpy.data.scenes[bpy.context.scene.name]
-    scene.render.engine = g_engine_type
-
-    #scene.render.image_settings.color_mode = g_depth_color_mode
-    #scene.render.image_settings.color_depth = g_depth_color_depth
-    scene.render.image_settings.file_format = g_depth_file_format
-    scene.render.use_overwrite = g_depth_use_overwrite
-    scene.render.use_file_extension = g_depth_use_file_extension 
-
-    scene.render.resolution_x = g_resolution_x
-    scene.render.resolution_y = g_resolution_y
-    scene.render.resolution_percentage = g_resolution_percentage
+    scene.render.engine = engine_type
+    scene.render.image_settings.file_format = depth_file_format
+    scene.render.use_overwrite = depth_use_overwrite
+    scene.render.use_file_extension = depth_use_file_extension 
+    scene.render.resolution_x, scene.render.resolution_y = resolution_x, resolution_y
+    scene.render.resolution_percentage = resolution_percentage
 
     if use_gpu:
         scene.render.engine = 'CYCLES'
-        scene.render.tile_x = g_hilbert_spiral
-        scene.render.tile_x = g_hilbert_spiral
+        scene.render.tile_x = scene.render.tile_y = hilbert_spiral
         #bpy.context.user_preferences.addons['cycles'].preferences.devices[0].use = True
         #bpy.context.user_preferences.addons['cycles'].preferences.compute_device_type = 'CUDA'
         bpy.types.CyclesRenderSettings.device = 'GPU'
         scene.cycles.device = 'GPU'
     
-    bpy.data.cameras['Camera'].clip_start = g_depth_clip_start
-    bpy.data.cameras['Camera'].clip_end = g_depth_clip_end
-    bpy.data.objects['Camera'].rotation_mode = g_rotation_mode
+    bpy.data.cameras['Camera'].clip_start = depth_clip_start
+    bpy.data.cameras['Camera'].clip_end = depth_clip_end
+    bpy.data.objects['Camera'].rotation_mode = rotation_mode
 
-    
     bpy.context.scene.use_nodes = True
     tree = bpy.context.scene.node_tree
     links = tree.links
 
     for node in tree.nodes:
         tree.nodes.remove(node)
-    
     render_layer_node = tree.nodes.new('CompositorNodeRLayers')
     map_value_node = tree.nodes.new('CompositorNodeMapValue')
     file_output_node = tree.nodes.new('CompositorNodeOutputFile')
 
-    map_value_node.offset[0] = -g_depth_clip_start
-    map_value_node.size[0] = 1 / (g_depth_clip_end - g_depth_clip_start)
+    map_value_node.offset[0] = -depth_clip_start
+    map_value_node.size[0] = 1 / (depth_clip_end - depth_clip_start)
     map_value_node.use_min = True
     map_value_node.use_max = True
     map_value_node.min[0] = 0.0
     map_value_node.max[0] = 1.0
 
-    file_output_node.format.color_mode = g_depth_color_mode
-    file_output_node.format.color_depth = g_depth_color_depth
-    file_output_node.format.file_format = g_depth_file_format 
-    file_output_node.base_path = g_syn_depth_folder
+    file_output_node.format.color_mode = depth_color_mode
+    file_output_node.format.color_depth = depth_color_depth
+    file_output_node.format.file_format = depth_file_format 
+    file_output_node.base_path = syn_depth_folder
 
     links.new(render_layer_node.outputs[2], map_value_node.inputs[0])
     links.new(map_value_node.outputs[0], file_output_node.inputs[0])
@@ -160,7 +196,12 @@ if __name__ == '__main__':
 			if obj.type == 'MESH':
 				obj.select = True
 		bpy.ops.object.delete()
+
         bpy.ops.import_scene.obj(filepath = model_path)
+		obj = bpy.context.selected_objects[0]
 
 		for viewpoint in rot_mats:
+			trans_4x4 = mathutils.Matrix.Translation(trans_vec)
+			rot_4x4 = mathutils.Matrix(rot_mat).to_4x4()
+			obj.matrix_world = trans_4x4 * rot_4x4
 			render_one_view(viewpoint)
