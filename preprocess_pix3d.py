@@ -2,6 +2,7 @@ import json
 import argparse
 import itertools
 import sklearn.cluster
+import scipy.spatial.transform
 import numpy as np
 
 parser = argparse.ArgumentParser()
@@ -16,16 +17,20 @@ by_category = {k : list(g) for k, g in itertools.groupby(sorted(meta, key = key_
 
 algo = sklearn.cluster.KMeans(n_clusters = args.k)
 
-rot_mat, trans_vec = {}, {}
+rot_mat, quat, trans_vec = {}, {}, {}
 for k, g in by_category.items():
     print(k)
     data = np.array([m['rot_mat'] for m in g])
     algo.fit(data.reshape(len(data), -1))
     rot_mat[k] = algo.cluster_centers_.reshape(-1, 3, 3).tolist()
     
+    data = np.array([scipy.spatial.transform.Rotation.from_matrix(m['rot_mat']).as_quat() for m in g])
+    algo.fit(data.reshape(len(data), -1))
+    quat[k] = algo.cluster_centers_.reshape(-1, 4).tolist()
+    
     data = np.array([m['trans_mat'] for m in g])
     algo.fit(data.reshape(len(data), -1))
     trans_vec[k] = algo.cluster_centers_.reshape(-1, 3).tolist()
 
-json.dump({k : dict(trans_vec = trans_vec[k], rot_mat = rot_mat[k]) for k in rot_mat}, open(args.output_path, 'w'), indent = 2)
+json.dump({k : dict(trans_vec = trans_vec[k], rot_mat = rot_mat[k], quat = quat[k]) for k in rot_mat}, open(args.output_path, 'w'), indent = 2)
 print(args.output_path)
