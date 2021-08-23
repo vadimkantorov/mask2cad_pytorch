@@ -62,7 +62,7 @@ def enable_gpu(use_gpu):
         bpy.types.CyclesRenderSettings.device = 'GPU'
         bpy.data.scenes[bpy.context.scene.name].cycles.device = 'GPU'
 
-def init_camera_scene_regular(n_samples = 50):
+def init_camera_scene_regular(n_samples = 5):
     camera_obj = bpy.data.objects['Camera']
     camera_obj.data.clip_end = 1e10
     
@@ -153,10 +153,6 @@ if __name__ == '__main__':
 
     enable_gpu(use_gpu = False)
     
-    #model_paths = [data['model']]
-    #trans_vec = data['trans_mat']
-    #rot_mat = data['rot_mat']
-
     for i, model_path in enumerate(model_paths):
         print(i, '/', len(model_paths), model_path)
         model_dir = os.path.join(args.output_path, os.path.dirname(model_path))
@@ -171,13 +167,16 @@ if __name__ == '__main__':
         
         bpy.ops.import_scene.obj(filepath=os.path.join(os.path.dirname(args.input_path), model_path), axis_forward='-Z', axis_up='Y')
         obj = bpy.context.selected_objects[0]
-        for k, rot_mat in enumerate(viewpoints_by_category[category]['rot_mat']):
-            #trans_vec = random.choice(viewpoints_by_category[category]['trans_vec'])
-            trans_vec = (0, 0, 0)
-            
+        for k in range(len(viewpoints_by_category[category]['rot_mat'])):
             frame_path = os.path.join(model_dir, 'view-{:06}.png'.format(1 + k))
-            
-            obj.matrix_world = mathutils.Matrix.Translation(trans_vec) @ mathutils.Matrix(rot_mat).to_4x4()
+            #trans_vec = random.choice(viewpoints_by_category[category]['trans_vec'])
+            trans_vec = viewpoints_by_category[category]['trans_vec'][0]
+            rot_mat = viewpoints_by_category[category]['rot_mat'][k]
+            quat = viewpoints_by_category[category]['quat'][k]
+
+            obj.location = trans_vec
+            obj.rotation_quaternion = quat
+            #obj.matrix_world = mathutils.Matrix.Translation(trans_vec) @ mathutils.Matrix(rot_mat).to_4x4()
             
             #file_output_node.base_path = os.path.dirname(frame_path)
             #file_output_node.file_slots[0].path = 'view-######.png'
