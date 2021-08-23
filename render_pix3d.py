@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import math
+import random
 import argparse
 
 import bpy
@@ -117,11 +118,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-path', '-i', default = 'data/common/pix3d/pix3d.json')
     parser.add_argument('--output-path', '-o', default = 'data/pix3d_renders')
-    parser.add_argument('--rot-mat', default = 'rot_mat.json')
+    parser.add_argument('--viewpoints-path', default = 'pix3d_clustered_viewpoints.json')
+    parser.add_argument('--seed', type = int, default = 42)
     args = parser.parse_args(sys.argv[1 + sys.argv.index('--'):] if '--' in sys.argv else [])
 
+    random.seed(args.seed)
+
     meta = json.load(open(args.input_path))
-    rot_mat_by_category = json.load(open(args.rot_mat))
+    viewpoints_by_category = json.load(open(args.viewpoints_path))
     model_paths = sorted(set(m['model'] for m in meta))
     
     data = meta[0]
@@ -148,17 +152,16 @@ if __name__ == '__main__':
     init_camera_scene_regular()
 
     enable_gpu(use_gpu = False)
+    
+    #model_paths = [data['model']]
+    #trans_vec = data['trans_mat']
+    #rot_mat = data['rot_mat']
 
     for i, model_path in enumerate(model_paths):
         print(i, '/', len(model_paths), model_path)
         model_dir = os.path.join(args.output_path, os.path.dirname(model_path))
         category = os.path.basename(os.path.dirname(os.path.dirname(model_path)))
         os.makedirs(model_dir, exist_ok = True)
-        rot_mats = rot_mat_by_category[category]
-        
-        #model_paths = [data['model']]
-        #trans_vec = data['trans_mat']
-        #rot_mat = data['rot_mat']
  
         bpy.ops.object.select_all(action = 'DESELECT')
         for obj in bpy.data.objects:
@@ -168,8 +171,10 @@ if __name__ == '__main__':
         
         bpy.ops.import_scene.obj(filepath=os.path.join(os.path.dirname(args.input_path), model_path), axis_forward='-Z', axis_up='Y')
         obj = bpy.context.selected_objects[0]
-        
-        for k, rot_mat in enumerate(rot_mats):
+        for k, rot_mat in enumerate(viewpoints_by_category[category]['rot_mat']):
+            #trans_vec = random.choice(viewpoints_by_category[category]['trans_vec'])
+            trans_vec = (0, 0, 0)
+            
             frame_path = os.path.join(model_dir, 'view-{:06}.png'.format(1 + k))
             
             obj.matrix_world = mathutils.Matrix.Translation(trans_vec) @ mathutils.Matrix(rot_mat).to_4x4()
