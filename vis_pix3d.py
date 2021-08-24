@@ -26,6 +26,7 @@ bpy.ops.import_scene.obj(filepath = model_path, axis_forward = 'Y', axis_up = 'Z
 obj = bpy.context.selected_objects[0]
 obj.location = (0, 0, 0)
 
+print(model_path)
 for m in views[view_slice]:
     bpy.ops.object.camera_add(location = m['cam_position'])
     print(m['cam_position'], m['img'])

@@ -174,9 +174,9 @@ if __name__ == '__main__':
             rot_mat = viewpoints_by_category[category]['rot_mat'][k]
             quat = viewpoints_by_category[category]['quat'][k]
 
-            obj.location = trans_vec
-            obj.rotation_quaternion = quat
-            #obj.matrix_world = mathutils.Matrix.Translation(trans_vec) @ mathutils.Matrix(rot_mat).to_4x4()
+            #obj.location = trans_vec
+            #obj.rotation_quaternion = quat
+            obj.matrix_world = mathutils.Matrix.Translation(trans_vec) @ mathutils.Matrix(rot_mat).to_4x4()
             
             #file_output_node.base_path = os.path.dirname(frame_path)
             #file_output_node.file_slots[0].path = 'view-######.png'
