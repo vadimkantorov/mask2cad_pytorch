@@ -29,7 +29,7 @@ jobs:
         run: ~/blender/blender -noaudio --background --python render_pix3d.py -- -i ~/pix3d/pix3d.json -o ~/pix3d_renders --render-synthetic-views
 
       - name: Archive renders
-        run: tar -cf ~/pix3d_renders.tar pix3d_renders -C ~
+        run: tar -C ~ -cf ~/pix3d_renders.tar pix3d_renders
 
       - name: Create Release
         env:
