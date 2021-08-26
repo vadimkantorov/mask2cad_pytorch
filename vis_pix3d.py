@@ -65,7 +65,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--input-path', '-i', default = 'data/common/pix3d/pix3d.json')
-    parser.add_argument('--output-path', '-o', default = 'test.blend')
+    parser.add_argument('--output-path', '-o', default = 'demo.blend')
     parser.add_argument('--model-idx', type = int, default = 0)
     parser.add_argument('--view-slice', type = int, nargs = '*')
     args = parser.parse_args(sys.argv[1 + sys.argv.index('--'):] if '--' in sys.argv else [])
