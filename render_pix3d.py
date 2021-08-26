@@ -12,8 +12,13 @@ import math
 import random
 import argparse
 
-import scipy.spatial
-from scipy.spatial.transform import Rotation as R
+try:
+    import numpy as np, scipy.spatial 
+except:
+    # install dependencies in Blender python
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'numpy', 'scipy'])
+finally:
+    import numpy as np, scipy.spatial
 
 import bpy
 import mathutils
@@ -138,6 +143,7 @@ def render_ground_truth_pose(metadata, args, color_mode, color_depth):
         break
     
 def render_synthetic_views(metadata, args, color_mode, color_repth):
+    from scipy.spatial.transform import Rotation as R
     w, h = args.wh
     f = 35
 
@@ -188,7 +194,6 @@ def render_synthetic_views(metadata, args, color_mode, color_repth):
             bpy.context.scene.frame_set(1 + bpy.context.scene.frame_current)
 
             print(frame_path)
-        return
 
 
 if __name__ == '__main__':
