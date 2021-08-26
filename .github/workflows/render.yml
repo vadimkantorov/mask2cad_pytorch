@@ -9,11 +9,11 @@ env:
 
 jobs:
 
-  build:
+  render:
     runs-on: ubuntu-20.04
     steps:
       - name: Setup Blender
-        run: wget -q ${{env.URL_BLENDER}} && mkdir ~/blender && tar -xf --strip-components=1 $(basename $${env.URL_BLENDER}}) -C ~/blender
+        run: wget -q ${{env.URL_BLENDER}} && mkdir ~/blender && tar -xf --strip-components=1 $(basename ${{env.URL_BLENDER}}) -C ~/blender
       
       - name: Pix3D
         run: wget -q ${{env.URL_PIX3D}} && unzip ~/pix3d.zip -d ~/pix3d -q
