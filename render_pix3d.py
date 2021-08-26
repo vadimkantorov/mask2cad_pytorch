@@ -12,8 +12,18 @@ import math
 import random
 import argparse
 
+import scipy.spatial
+from scipy.spatial.transform import Rotation as R
+
 import bpy
 import mathutils
+
+def delete_mesh_objects():
+    bpy.ops.object.select_all(action = 'DESELECT')
+    for obj in bpy.data.objects:
+        if obj.type == 'MESH':
+            obj.select_set(True)
+    bpy.ops.object.delete()
 
 def set_camera_location_rotation(azimuth, elevation, distance, tilt):
     # render z pass ; render a object z pass map by a given camera viewpoints
@@ -40,11 +50,11 @@ def configure_camera(camera_obj, lens):
     camera_obj.data.sensor_width = 32
     camera_obj.data.sensor_height = 18
     camera_obj.data.sensor_fit = 'HORIZONTAL'
-    camera_obj.data.lens = data['focal_length']
+    camera_obj.data.lens = lens 
 
-def configure_scene_render(scene_render, resolution_x, resolution_y, tiles, color_mode, color_depth):
+def configure_scene_render(scene_render, resolution_x, resolution_y, tiles, color_mode, color_depth, file_format = 'JPEG'):
     scene_render.engine = 'CYCLES'
-    scene_render.image_settings.file_format = 'PNG'
+    scene_render.image_settings.file_format = file_format
     scene_render.use_overwrite = True
     scene_render.use_file_extension = True
     scene_render.resolution_x = resolution_x
@@ -55,20 +65,20 @@ def configure_scene_render(scene_render, resolution_x, resolution_y, tiles, colo
     scene_render.image_settings.color_mode = color_mode
     scene_render.image_settings.color_depth = color_depth
     
-def enable_gpu(use_gpu):
-    if use_gpu:
+def enable_gpu(gpu):
+    if gpu:
         #bpy.context.user_preferences.addons['cycles'].preferences.devices[0].use = True
         #bpy.context.user_preferences.addons['cycles'].preferences.compute_device_type = 'CUDA'
         bpy.types.CyclesRenderSettings.device = 'GPU'
         bpy.data.scenes[bpy.context.scene.name].cycles.device = 'GPU'
 
-def init_camera_scene_regular(n_samples = 5):
+def init_camera_scene_regular(samples = 5):
     camera_obj = bpy.data.objects['Camera']
     camera_obj.data.clip_end = 1e10
     
     cycles = bpy.context.scene.cycles
     cycles.use_progressive_refine = True
-    cycles.samples = n_samples
+    cycles.samples = samples
     cycles.max_bounces = 100
     cycles.min_bounces = 10
     cycles.caustics_reflective = False
@@ -114,72 +124,80 @@ def init_camera_scene_depth(color_mode, color_depth, clip_start = 0.5, clip_end 
 
     return file_output_node
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--input-path', '-i', default = 'data/common/pix3d/pix3d.json')
-    parser.add_argument('--output-path', '-o', default = 'data/pix3d_renders')
-    parser.add_argument('--viewpoints-path', default = 'pix3d_clustered_viewpoints.json')
-    parser.add_argument('--seed', type = int, default = 42)
-    args = parser.parse_args(sys.argv[1 + sys.argv.index('--'):] if '--' in sys.argv else [])
+def render_ground_truth_pose(metadata, args, color_mode, color_depth):
+    for i, m in enumerate(metadata):
+        print(i, '/', len(metadata), m['img'])
+        category = m['category']
+        if args.category and category not in args.category:
+            continue
+        
+        w, h = m['img_size']
+        f = m['focal_length']
+        model_path = m['model']
+        trans_vec, rot_mat = m['trans_mat'], m['rot_mat']
 
-    random.seed(args.seed)
-
-    meta = json.load(open(args.input_path))
-    viewpoints_by_category = json.load(open(args.viewpoints_path))
-    model_paths = sorted(set(m['model'] for m in meta))
+        frame_path = os.path.join(args.output_path, m['img'])
+        frame_dir = os.path.dirname(frame_path)
+        os.makedirs(frame_dir, exist_ok = True)
     
-    data = meta[0]
-    #w, h = data['img_size']
-    #f = data['focal_length']
-    w, h = 640, 480
+        configure_scene_render(bpy.data.scenes[bpy.context.scene.name].render, w, h, args.tiles, color_mode = color_mode, color_depth = color_depth)
+        configure_camera(bpy.data.objects['Camera'], f)
+        
+        delete_mesh_objects()
+        bpy.ops.import_scene.obj(filepath = os.path.join(os.path.dirname(args.input_path), model_path), axis_forward='-Z', axis_up='Y')
+        obj = bpy.context.selected_objects[0]
+        
+        obj.matrix_world = mathutils.Matrix.Translation(trans_vec) @ mathutils.Matrix(rot_mat).to_4x4()
+    
+        bpy.context.scene.render.filepath = frame_path
+        bpy.ops.render.render(write_still = True)
+        
+        print(frame_path)
+        break
+    
+def render_synthetic_views(metadata, args, color_mode, color_repth):
+    w, h = args.wh
     f = 35
-    
-    hilbert_spiral = 512
-    color_mode, color_depth = 'BW', '8'
-    
-    bpy.context.scene.render.engine = 'CYCLES'
-    world = bpy.data.worlds['World']
-    world.light_settings.use_ambient_occlusion = True
-    world.light_settings.ao_factor = 0.9
 
-    scene = bpy.data.scenes[bpy.context.scene.name]
-    configure_scene_render(scene.render, w, h, hilbert_spiral, color_mode = color_mode, color_depth = color_depth)
-    
+    configure_scene_render(bpy.data.scenes[bpy.context.scene.name].render, w, h, args.tiles, color_mode = color_mode, color_depth = color_depth)
     configure_camera(bpy.data.objects['Camera'], f)
-    bpy.context.scene.camera = bpy.data.objects['Camera']
     
-    #file_output_node = init_camera_scene_depth(color_mode = color_mode, color_depth = color_depth)
-    init_camera_scene_regular()
-
-    enable_gpu(use_gpu = False)
-    
+    model_paths = sorted(set(m['model'] for m in metadata))
     for i, model_path in enumerate(model_paths):
         print(i, '/', len(model_paths), model_path)
-        model_dir = os.path.join(args.output_path, os.path.dirname(model_path))
         category = os.path.basename(os.path.dirname(os.path.dirname(model_path)))
-        os.makedirs(model_dir, exist_ok = True)
- 
-        bpy.ops.object.select_all(action = 'DESELECT')
-        for obj in bpy.data.objects:
-            if obj.type == 'MESH':
-                obj.select_set(True)
-        bpy.ops.object.delete()
+        if args.category and category not in args.category:
+            continue
+
+        frame_dir = os.path.join(args.output_path, os.path.dirname(model_path))
+        os.makedirs(frame_dir, exist_ok = True)
+
+        delete_mesh_objects()
         
+        sample_trans_vec = lambda category: viewpoints_by_category[category]['trans_vec'][0]
+        #sample_trans_vec = lambda category: random.choice(viewpoints_by_category[category]['trans_vec'])
+
         bpy.ops.import_scene.obj(filepath=os.path.join(os.path.dirname(args.input_path), model_path), axis_forward='-Z', axis_up='Y')
         obj = bpy.context.selected_objects[0]
         for k in range(len(viewpoints_by_category[category]['rot_mat'])):
-            frame_path = os.path.join(model_dir, 'view-{:06}.png'.format(1 + k))
-            #trans_vec = random.choice(viewpoints_by_category[category]['trans_vec'])
-            trans_vec = viewpoints_by_category[category]['trans_vec'][0]
+            frame_path = os.path.join(frame_dir, '{:04}.jpg'.format(1 + k))
+            trans_vec = sample_trans_vec(category)
+            
             rot_mat = viewpoints_by_category[category]['rot_mat'][k]
-            quat = viewpoints_by_category[category]['quat'][k]
+            #quat = viewpoints_by_category[category]['quat'][k]
+            
+            quat = mathutils.Matrix(rot_mat).to_quaternion()
+            quat_ = R.from_matrix(rot_mat).as_quat() 
+            obj.rotation_mode = 'QUATERNION'
+            obj.rotation_quaternion = (quat_[-1], quat_[0], quat_[1], quat_[2])
+            obj.location = trans_vec
+            
+            #rot_mat = R.from_quat(quat).as_matrix()
 
-            #obj.location = trans_vec
-            #obj.rotation_quaternion = quat
-            obj.matrix_world = mathutils.Matrix.Translation(trans_vec) @ mathutils.Matrix(rot_mat).to_4x4()
+            #obj.matrix_world = mathutils.Matrix.Translation(trans_vec) @ mathutils.Matrix(rot_mat).to_4x4()
             
             #file_output_node.base_path = os.path.dirname(frame_path)
-            #file_output_node.file_slots[0].path = 'view-######.png'
+            #file_output_node.file_slots[0].path = '####.jpg'
             #bpy.ops.render.render(write_still = False)
     
             bpy.context.scene.render.filepath = frame_path
@@ -188,4 +206,42 @@ if __name__ == '__main__':
             bpy.context.scene.frame_set(1 + bpy.context.scene.frame_current)
 
             print(frame_path)
-        break
+        return
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input-path', '-i', default = 'data/common/pix3d/pix3d.json')
+    parser.add_argument('--output-path', '-o', default = 'data/pix3d_renders')
+    parser.add_argument('--viewpoints-path', default = 'pix3d_clustered_viewpoints.json')
+    parser.add_argument('--seed', type = int, default = 42)
+    parser.add_argument('--gpu', action = 'store_true')
+    parser.add_argument('--category', nargs = '*')
+    parser.add_argument('--tiles', type = int, default = 16)
+    parser.add_argument('--samples', type = int, default = 50)
+    parser.add_argument('--wh', type = int, nargs = 2, default = [128, 128])
+    parser.add_argument('--render-ground-truth-views', action = 'store_true')
+    parser.add_argument('--render-synthetic-views', action = 'store_true')
+    args = parser.parse_args(sys.argv[1 + sys.argv.index('--'):] if '--' in sys.argv else [])
+
+    random.seed(args.seed)
+
+    metadata = json.load(open(args.input_path))
+    viewpoints_by_category = json.load(open(args.viewpoints_path))
+    
+    color_mode, color_depth = 'BW', '8'
+    
+    bpy.context.scene.render.engine = 'CYCLES'
+    world = bpy.data.worlds['World']
+    world.light_settings.use_ambient_occlusion = True
+    world.light_settings.ao_factor = 0.9
+    bpy.context.scene.camera = bpy.data.objects['Camera']
+    #file_output_node = init_camera_scene_depth(color_mode = color_mode, color_depth = color_depth)
+    init_camera_scene_regular(samples = args.samples)
+    enable_gpu(args.gpu)
+
+    if args.render_ground_truth_views:
+        render_ground_truth_pose(metadata, args, color_mode, color_depth)
+    
+    if args.render_synthetic_views:
+        render_synthetic_views(metadata, args, color_mode, color_depth)

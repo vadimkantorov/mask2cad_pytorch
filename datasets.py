@@ -53,7 +53,7 @@ class RenderedViews(torchvision.datasets.VisionDataset):
     def __getitem__(self, idx):
         img, extra = self.dataset[idx[0]]
         view_dir = os.path.join(self.root, extra['shape'])
-        views = torch.stack([torchvision.io.read_image(os.path.join(self.root, extra['image']) if k == 0 else os.path.join(view_dir, str(k) + self.ext)) for k in idx[1:]])
+        views = torch.stack([torchvision.io.read_image(os.path.join(self.root, extra['image']) if k == 0 else os.path.join(view_dir, f'{k:03}' + self.ext)) for k in idx[1:]])
 
         return img, extra, views
 

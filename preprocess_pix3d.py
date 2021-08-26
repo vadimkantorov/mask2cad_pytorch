@@ -1,6 +1,10 @@
 import json
 import argparse
 import itertools
+
+from pyclustering.cluster.kmedoids import kmedoids
+from pyclustering.cluster.center_initializer import kmeans_plusplus_initializer
+
 import sklearn.cluster
 import sklearn_extra.cluster
 import scipy.spatial.transform
@@ -11,6 +15,8 @@ parser.add_argument('--input-path', '-i', default = 'data/common/pix3d/pix3d.jso
 parser.add_argument('--output-path', '-o', default = 'pix3d_clustered_viewpoints.json')
 parser.add_argument('-k', type = int, default = 16)
 args = parser.parse_args()
+    
+quatpdist = lambda a: 2 * np.arccos(np.abs(np.clip(a @ a.T, -1.0, 1.0)))
 
 meta = json.load(open(args.input_path))
 key_category = lambda m: m['category']
@@ -22,13 +28,21 @@ algo = sklearn_extra.cluster.KMedoids(n_clusters = args.k)
 rot_mat, quat, trans_vec = {}, {}, {}
 for k, g in by_category.items():
     print(k)
+
+    data = np.array([scipy.spatial.transform.Rotation.from_matrix(m['rot_mat']).as_quat() for m in g])
+    initial_medoids = kmeans_plusplus_initializer(data, args.k).initialize(return_index=True)
+    kmedoids_instance = kmedoids(quatpdist(data), initial_medoids, data_type = 'distance_matrix')
+    kmedoids_instance.process()
+    medoids = kmedoids_instance.get_medoids()
+    quat[k] = [data[i].tolist() for i in medoids]
+    
+    #algo.fit(data.reshape(len(data), -1))
+    #quat[k] = algo.cluster_centers_.reshape(-1, 4).tolist()
+    
     data = np.array([m['rot_mat'] for m in g])
     algo.fit(data.reshape(len(data), -1))
     rot_mat[k] = algo.cluster_centers_.reshape(-1, 3, 3).tolist()
     
-    data = np.array([scipy.spatial.transform.Rotation.from_matrix(m['rot_mat']).as_quat() for m in g])
-    algo.fit(data.reshape(len(data), -1))
-    quat[k] = algo.cluster_centers_.reshape(-1, 4).tolist()
     
     data = np.array([m['trans_mat'] for m in g])
     algo.fit(data.reshape(len(data), -1))
