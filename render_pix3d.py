@@ -15,7 +15,7 @@ import argparse
 try:
     import numpy as np, scipy.spatial 
 except:
-    # install dependencies in Blender python
+    subprocess.call([sys.executable, '-m', 'ensurepip'])
     subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'numpy', 'scipy'])
 finally:
     import numpy as np, scipy.spatial
