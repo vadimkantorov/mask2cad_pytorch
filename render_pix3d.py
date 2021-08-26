@@ -25,24 +25,6 @@ def delete_mesh_objects():
             obj.select_set(True)
     bpy.ops.object.delete()
 
-def set_camera_location_rotation(azimuth, elevation, distance, tilt):
-    # render z pass ; render a object z pass map by a given camera viewpoints
-    # args in degrees/meters (object centered)
-    azimuth, elevation, distance, tilt = map(float, [azimuth, elevation, distance, tilt])
-    camera = bpy.data.objects['Camera']
-    
-    phi = elevation * math.pi / 180 
-    theta = azimuth * math.pi / 180
-    x = distance * math.cos(phi) * math.cos(theta)
-    y = distance * math.cos(phi) * math.sin(theta)
-    z = distance * math.sin(phi)
-    camera.location = (x, y, z)
-
-    x, y, z = 90, 0, 90 #set camera at x axis facing towards object
-    x = x - elevation   #latitude
-    z = z + azimuth     #longtitude
-    camera.rotation_euler = (x * math.pi / 180, y * math.pi / 180, z * math.pi / 180)
-
 def configure_camera(camera_obj, lens):
     camera_obj.location = (0, 0, 0)
     camera_obj.rotation_euler = (0, math.pi, 0)
