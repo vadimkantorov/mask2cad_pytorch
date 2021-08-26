@@ -21,9 +21,12 @@ jobs:
       - uses: actions/checkout@v2
         with:
           fetch-depth: 1
+      
+      - name: Preprocess Pix3D
+        run: python -m pip install scipy numpy sklearn pyclustering && python preprocess_pix3d.py -i ~/pix3d/pix3d.json
 
       - name: Render
-        run: ~/blender/blender -noaudio --background --python render_pix3d.py -- --input-path ~/pix3d --output-path ~ --render-synthetic-views
+        run: ~/blender/blender -noaudio --background --python render_pix3d.py -- -i ~/pix3d/pix3d.json -o ~/pix3d_renders --render-synthetic-views
 
       - name: Archive renders
         run: tar -cf ~/pix3d_renders.tar pix3d_renders -C ~
@@ -31,4 +34,4 @@ jobs:
       - name: Create Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: hub release create -m "Pix3D renders" -a ~/pix3d_renders.tar build_${{github.sha}}
+        run: hub release create -m "Pix3D renders" -a ~/pix3d_renders.tar pix3d_renders_${{github.sha}}

@@ -6,7 +6,6 @@ from pyclustering.cluster.kmedoids import kmedoids
 from pyclustering.cluster.center_initializer import kmeans_plusplus_initializer
 
 import sklearn.cluster
-import sklearn_extra.cluster
 import scipy.spatial.transform
 import numpy as np
 
@@ -22,8 +21,7 @@ meta = json.load(open(args.input_path))
 key_category = lambda m: m['category']
 by_category = {k : list(g) for k, g in itertools.groupby(sorted(meta, key = key_category), key = key_category)}
 
-#algo = sklearn.cluster.KMeans(n_clusters = args.k)
-algo = sklearn_extra.cluster.KMedoids(n_clusters = args.k)
+algo = sklearn.cluster.KMeans(n_clusters = args.k)
 
 rot_mat, quat, trans_vec = {}, {}, {}
 for k, g in by_category.items():
@@ -35,9 +33,6 @@ for k, g in by_category.items():
     kmedoids_instance.process()
     medoids = kmedoids_instance.get_medoids()
     quat[k] = [data[i].tolist() for i in medoids]
-    
-    #algo.fit(data.reshape(len(data), -1))
-    #quat[k] = algo.cluster_centers_.reshape(-1, 4).tolist()
     
     data = np.array([m['rot_mat'] for m in g])
     algo.fit(data.reshape(len(data), -1))
