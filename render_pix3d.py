@@ -167,11 +167,12 @@ def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_b
         obj = bpy.context.selected_objects[0]
         for k in range(len(viewpoints_by_category[category]['quat'])):
             frame_path = os.path.join(frame_dir, '{:04}.jpg'.format(1 + k))
-            trans_vec = sample_trans_vec(category)
-            quat_ = viewpoints_by_category[category]['quat'][k]
+            #trans_vec = sample_trans_vec(category)
+            quat = viewpoints_by_category[category]['quat'][k]
             
-            obj.rotation_quaternion = (quat_[-1], quat_[0], quat_[1], quat_[2])
-            obj.location = trans_vec
+            obj.rotation_mode = 'QUATERNION'
+            obj.rotation_quaternion = quat[-1:] + quat[:3]
+            obj.location = (0, 0, 2)
             
             #file_output_node.base_path = os.path.dirname(frame_path)
             #file_output_node.file_slots[0].path = '####.jpg'
@@ -183,6 +184,7 @@ def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_b
             bpy.context.scene.frame_set(1 + bpy.context.scene.frame_current)
 
             print(frame_path)
+        break
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -197,7 +199,8 @@ if __name__ == '__main__':
     parser.add_argument('--wh', type = int, nargs = 2, default = [128, 128])
     parser.add_argument('--render-ground-truth-views', action = 'store_true')
     parser.add_argument('--render-synthetic-views', action = 'store_true')
-    parser.add_argument('--focal-length', action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update(dict([v.split('=')])))), default = dict(bed = 50, bookcase = 200, chair = 200, desk = 50, misc = 50, sofa = 50, table = 40, tool = 50, wardrobe = 40) )
+    parser.add_argument('--focal-length', type = float, default = 50)
+    parser.add_argument('--object-location', type = float, nargs = 3, default = [0, 0, 2.0])
     args = parser.parse_args(sys.argv[1 + sys.argv.index('--'):] if '--' in sys.argv else [])
 
     random.seed(args.seed)
