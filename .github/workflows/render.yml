@@ -26,7 +26,7 @@ jobs:
         run: python -m pip install scipy numpy sklearn pyclustering && python preprocess_pix3d.py -i ~/pix3d/pix3d.json
 
       - name: Render
-        run: ~/blender/blender -noaudio --background --python render_pix3d.py -- -i ~/pix3d/pix3d.json -o ~/pix3d_renders --render-synthetic-views
+        run: ~/blender/blender -noaudio --background --python render_pix3d.py -- -i ~/pix3d/pix3d.json -o ~/pix3d_renders --render-synthetic-views --render-ground-truth-views
 
       - name: Archive renders
         run: tar -C ~ -cf ~/pix3d_renders.tar pix3d_renders
