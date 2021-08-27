@@ -137,7 +137,6 @@ def render_ground_truth_pose(metadata, args, color_mode, color_depth):
         bpy.ops.render.render(write_still = True)
         
         print(frame_path)
-        break
     
 def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_by_category):
     w, h = args.wh
