@@ -196,8 +196,6 @@ def render_synthetic_views(metadata, args, color_mode, color_repth):
             bpy.context.scene.frame_set(1 + bpy.context.scene.frame_current)
 
             print(frame_path)
-            break
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
