@@ -173,11 +173,11 @@ def render_synthetic_views(metadata, args, color_mode, color_repth):
             frame_path = os.path.join(frame_dir, '{:04}.jpg'.format(1 + k))
             trans_vec = sample_trans_vec(category)
             
-            rot_mat = viewpoints_by_category[category]['rot_mat'][k]
-            #quat = viewpoints_by_category[category]['quat'][k]
+            #rot_mat = viewpoints_by_category[category]['rot_mat'][k]
+            quat_ = viewpoints_by_category[category]['quat'][k]
             
-            quat = mathutils.Matrix(rot_mat).to_quaternion()
-            quat_ = R.from_matrix(rot_mat).as_quat() 
+            #quat = mathutils.Matrix(rot_mat).to_quaternion()
+            #quat_ = R.from_matrix(rot_mat).as_quat() 
             obj.rotation_mode = 'QUATERNION'
             obj.rotation_quaternion = (quat_[-1], quat_[0], quat_[1], quat_[2])
             obj.location = trans_vec
