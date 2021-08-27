@@ -146,10 +146,8 @@ def render_ground_truth_pose(metadata, args, color_mode, color_depth):
 def render_synthetic_views(metadata, args, color_mode, color_repth):
     from scipy.spatial.transform import Rotation as R
     w, h = args.wh
-    f = 35
 
     configure_scene_render(bpy.data.scenes[bpy.context.scene.name].render, w, h, args.tiles, color_mode = color_mode, color_depth = color_depth)
-    configure_camera(bpy.data.objects['Camera'], f)
     
     model_paths = sorted(set(m['model'] for m in metadata))
     for i, model_path in enumerate(model_paths):
@@ -157,6 +155,9 @@ def render_synthetic_views(metadata, args, color_mode, color_repth):
         category = os.path.basename(os.path.dirname(os.path.dirname(model_path)))
         if args.category and category not in args.category:
             continue
+    
+        f = args.focal_length[category]
+        configure_camera(bpy.data.objects['Camera'], f)
 
         frame_dir = os.path.join(args.output_path, os.path.dirname(model_path))
         os.makedirs(frame_dir, exist_ok = True)
@@ -195,6 +196,7 @@ def render_synthetic_views(metadata, args, color_mode, color_repth):
             bpy.context.scene.frame_set(1 + bpy.context.scene.frame_current)
 
             print(frame_path)
+            break
 
 
 if __name__ == '__main__':
@@ -210,6 +212,7 @@ if __name__ == '__main__':
     parser.add_argument('--wh', type = int, nargs = 2, default = [128, 128])
     parser.add_argument('--render-ground-truth-views', action = 'store_true')
     parser.add_argument('--render-synthetic-views', action = 'store_true')
+    parser.add_argument('--focal-length', action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update(dict([v.split('=')])))), default = dict(bed = 50, bookcase = 200, chair = 200, desk = 50, misc = 50, sofa = 50, table = 40, tool = 50, wardrobe = 50) )
     args = parser.parse_args(sys.argv[1 + sys.argv.index('--'):] if '--' in sys.argv else [])
 
     random.seed(args.seed)
