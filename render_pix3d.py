@@ -141,7 +141,6 @@ def render_ground_truth_pose(metadata, args, color_mode, color_depth):
         break
     
 def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_by_category):
-    from scipy.spatial.transform import Rotation as R
     w, h = args.wh
 
     configure_scene_render(bpy.data.scenes[bpy.context.scene.name].render, w, h, args.tiles, color_mode = color_mode, color_depth = color_depth)
