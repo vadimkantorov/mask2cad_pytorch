@@ -1,6 +1,3 @@
-# Blender 2.93
-# blender -noaudio --background --python render_pix3d.py -- -o data/pix3d_renders
-
 # based on:
 # https://github.com/weiaicunzai/blender_shapenet_render/blob/master/render_depth.py
 # https://github.com/xingyuansun/pix3d/blob/master/demo.py
@@ -143,12 +140,15 @@ def render_ground_truth_pose(metadata, args, color_mode, color_depth):
         print(frame_path)
         break
     
-def render_synthetic_views(metadata, args, color_mode, color_repth):
+def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_by_category):
     from scipy.spatial.transform import Rotation as R
     w, h = args.wh
 
     configure_scene_render(bpy.data.scenes[bpy.context.scene.name].render, w, h, args.tiles, color_mode = color_mode, color_depth = color_depth)
     
+    sample_trans_vec = lambda category: viewpoints_by_category[category]['trans_vec'][0]
+    #sample_trans_vec = lambda category: random.choice(viewpoints_by_category[category]['trans_vec'])
+
     model_paths = sorted(set(m['model'] for m in metadata))
     for i, model_path in enumerate(model_paths):
         print(i, '/', len(model_paths), model_path)
@@ -162,29 +162,17 @@ def render_synthetic_views(metadata, args, color_mode, color_repth):
         frame_dir = os.path.join(args.output_path, os.path.dirname(model_path))
         os.makedirs(frame_dir, exist_ok = True)
 
-        delete_mesh_objects()
-        
-        sample_trans_vec = lambda category: viewpoints_by_category[category]['trans_vec'][0]
-        #sample_trans_vec = lambda category: random.choice(viewpoints_by_category[category]['trans_vec'])
+        delete_mesh_objects()    
 
         bpy.ops.import_scene.obj(filepath=os.path.join(os.path.dirname(args.input_path), model_path), axis_forward='-Z', axis_up='Y')
         obj = bpy.context.selected_objects[0]
-        for k in range(len(viewpoints_by_category[category]['rot_mat'])):
+        for k in range(len(viewpoints_by_category[category]['quat'])):
             frame_path = os.path.join(frame_dir, '{:04}.jpg'.format(1 + k))
             trans_vec = sample_trans_vec(category)
-            
-            #rot_mat = viewpoints_by_category[category]['rot_mat'][k]
             quat_ = viewpoints_by_category[category]['quat'][k]
             
-            #quat = mathutils.Matrix(rot_mat).to_quaternion()
-            #quat_ = R.from_matrix(rot_mat).as_quat() 
-            obj.rotation_mode = 'QUATERNION'
             obj.rotation_quaternion = (quat_[-1], quat_[0], quat_[1], quat_[2])
             obj.location = trans_vec
-            
-            #rot_mat = R.from_quat(quat).as_matrix()
-
-            #obj.matrix_world = mathutils.Matrix.Translation(trans_vec) @ mathutils.Matrix(rot_mat).to_4x4()
             
             #file_output_node.base_path = os.path.dirname(frame_path)
             #file_output_node.file_slots[0].path = '####.jpg'
@@ -210,7 +198,7 @@ if __name__ == '__main__':
     parser.add_argument('--wh', type = int, nargs = 2, default = [128, 128])
     parser.add_argument('--render-ground-truth-views', action = 'store_true')
     parser.add_argument('--render-synthetic-views', action = 'store_true')
-    parser.add_argument('--focal-length', action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update(dict([v.split('=')])))), default = dict(bed = 50, bookcase = 200, chair = 200, desk = 50, misc = 50, sofa = 50, table = 40, tool = 50, wardrobe = 50) )
+    parser.add_argument('--focal-length', action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update(dict([v.split('=')])))), default = dict(bed = 50, bookcase = 200, chair = 200, desk = 50, misc = 50, sofa = 50, table = 40, tool = 50, wardrobe = 40) )
     args = parser.parse_args(sys.argv[1 + sys.argv.index('--'):] if '--' in sys.argv else [])
 
     random.seed(args.seed)
@@ -225,12 +213,13 @@ if __name__ == '__main__':
     world.light_settings.use_ambient_occlusion = True
     world.light_settings.ao_factor = 0.9
     bpy.context.scene.camera = bpy.data.objects['Camera']
+    enable_gpu(args.gpu)
+
     #file_output_node = init_camera_scene_depth(color_mode = color_mode, color_depth = color_depth)
     init_camera_scene_regular(samples = args.samples)
-    enable_gpu(args.gpu)
 
     if args.render_ground_truth_views:
         render_ground_truth_pose(metadata, args, color_mode, color_depth)
     
     if args.render_synthetic_views:
-        render_synthetic_views(metadata, args, color_mode, color_depth)
+        render_synthetic_views(metadata, args, color_mode, color_depth, viewpoints_by_category)

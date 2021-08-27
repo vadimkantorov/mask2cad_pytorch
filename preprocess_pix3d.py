@@ -23,7 +23,7 @@ by_category = {k : list(g) for k, g in itertools.groupby(sorted(meta, key = key_
 
 algo = sklearn.cluster.KMeans(n_clusters = args.k)
 
-rot_mat, quat, trans_vec = {}, {}, {}
+quat, trans_vec = {}, {}
 for k, g in by_category.items():
     print(k)
 
@@ -34,14 +34,9 @@ for k, g in by_category.items():
     medoids = kmedoids_instance.get_medoids()
     quat[k] = [data[i].tolist() for i in medoids]
     
-    data = np.array([m['rot_mat'] for m in g])
-    algo.fit(data.reshape(len(data), -1))
-    rot_mat[k] = algo.cluster_centers_.reshape(-1, 3, 3).tolist()
-    
-    
     data = np.array([m['trans_mat'] for m in g])
     algo.fit(data.reshape(len(data), -1))
     trans_vec[k] = algo.cluster_centers_.reshape(-1, 3).tolist()
 
-json.dump({k : dict(trans_vec = trans_vec[k], rot_mat = rot_mat[k], quat = quat[k]) for k in rot_mat}, open(args.output_path, 'w'), indent = 2)
+json.dump({k : dict(trans_vec = trans_vec[k], quat = quat[k]) for k in quat}, open(args.output_path, 'w'), indent = 2)
 print(args.output_path)
