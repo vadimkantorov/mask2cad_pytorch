@@ -33,10 +33,6 @@ for k, g in by_category.items():
     kmedoids_instance.process()
     medoids = kmedoids_instance.get_medoids()
     quat[k] = [data[i].tolist() for i in medoids]
-    
-    data = np.array([m['trans_mat'] for m in g])
-    algo.fit(data.reshape(len(data), -1))
-    trans_vec[k] = algo.cluster_centers_.reshape(-1, 3).tolist()
 
-json.dump({k : dict(trans_vec = trans_vec[k], quat = quat[k]) for k in quat}, open(args.output_path, 'w'), indent = 2)
+json.dump({k : quat[k] for k in quat}, open(args.output_path, 'w'), indent = 2)
 print(args.output_path)

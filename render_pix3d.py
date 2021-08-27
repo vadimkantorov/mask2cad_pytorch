@@ -6,7 +6,6 @@ import os
 import sys
 import json
 import math
-import random
 import argparse
 import subprocess
 
@@ -144,19 +143,14 @@ def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_b
     w, h = args.wh
 
     configure_scene_render(bpy.data.scenes[bpy.context.scene.name].render, w, h, args.tiles, color_mode = color_mode, color_depth = color_depth)
+    configure_camera(bpy.data.objects['Camera'], args.focal_length)
     
-    sample_trans_vec = lambda category: viewpoints_by_category[category]['trans_vec'][0]
-    #sample_trans_vec = lambda category: random.choice(viewpoints_by_category[category]['trans_vec'])
-
     model_paths = sorted(set(m['model'] for m in metadata))
     for i, model_path in enumerate(model_paths):
         print(i, '/', len(model_paths), model_path)
         category = os.path.basename(os.path.dirname(os.path.dirname(model_path)))
         if args.category and category not in args.category:
             continue
-    
-        f = args.focal_length[category]
-        configure_camera(bpy.data.objects['Camera'], f)
 
         frame_dir = os.path.join(args.output_path, os.path.dirname(model_path))
         os.makedirs(frame_dir, exist_ok = True)
@@ -165,14 +159,12 @@ def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_b
 
         bpy.ops.import_scene.obj(filepath=os.path.join(os.path.dirname(args.input_path), model_path), axis_forward='-Z', axis_up='Y')
         obj = bpy.context.selected_objects[0]
-        for k in range(len(viewpoints_by_category[category]['quat'])):
+        for k, quat in enumerate(viewpoints_by_category[category]):
             frame_path = os.path.join(frame_dir, '{:04}.jpg'.format(1 + k))
-            #trans_vec = sample_trans_vec(category)
-            quat = viewpoints_by_category[category]['quat'][k]
             
             obj.rotation_mode = 'QUATERNION'
             obj.rotation_quaternion = quat[-1:] + quat[:3]
-            obj.location = (0, 0, 2)
+            obj.location = args.object_location
             
             #file_output_node.base_path = os.path.dirname(frame_path)
             #file_output_node.file_slots[0].path = '####.jpg'
@@ -202,8 +194,6 @@ if __name__ == '__main__':
     parser.add_argument('--focal-length', type = float, default = 50)
     parser.add_argument('--object-location', type = float, nargs = 3, default = [0, 0, 2.0])
     args = parser.parse_args(sys.argv[1 + sys.argv.index('--'):] if '--' in sys.argv else [])
-
-    random.seed(args.seed)
 
     metadata = json.load(open(args.input_path))
     viewpoints_by_category = json.load(open(args.viewpoints_path))
