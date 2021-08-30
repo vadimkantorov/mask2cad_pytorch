@@ -5,6 +5,11 @@ import torch.utils.data
 import torch.nn.functional as F
 import torchvision
 
+
+def worker_init_fn(worker_id, num_threads = 1):
+    torch.manual_seed(worker_id)
+    #torch.cuda.manual_seed_all(worker_id) if torch.cuda.is_available() else None
+
 def collate_fn(batch):
     assert batch
 
@@ -16,16 +21,20 @@ def collate_fn(batch):
         image = [b[1]['image'] for b in batch], 
         shape_idx = torch.tensor([b[1]['shape_idx'] for b in batch]), 
         category_idx = torch.tensor([b[1]['category_idx'] for b in batch]), 
-        bbox = torch.tensor([b[1]['bbox'] for b in batch])
+        bbox = torch.tensor([b[1]['bbox'] for b in batch]),
+        object_location = torch.tensor([b[1]['object_location'] for b in batch]),
+        object_rotation = torch.tensor([b[1]['object_rotation'] for b in batch])
     )
-    views = torch.stack([b[2] for b in batch]) if len(batch[0]) > 2 else ()
+    views = (torch.stack([b[2] for b in batch]), ) if len(batch[0]) > 2 else ()
 
     return (img, extra) + views
 
 class RenderedViewsRandomSampler(torch.utils.data.Sampler):
-    def __init__(self, num_examples, num_rendered_views):
+    def __init__(self, num_examples, num_rendered_views, num_sampled_views, num_sampled_boxes):
         self.num_examples = num_examples
         self.num_rendered_views = num_rendered_views
+        self.num_sampled_views = num_sampled_views
+        self.num_sampled_boxes = num_sampled_boxes
         self.shuffled = None
 
     def set_epoch(self, epoch):
@@ -34,9 +43,10 @@ class RenderedViewsRandomSampler(torch.utils.data.Sampler):
 
         example_idx   = torch.arange(self.num_examples, dtype = torch.int64)[:, None]
         main_view_idx = torch. zeros(self.num_examples, dtype = torch.int64)[:, None]
-        novel_view_idx = 1 + torch.rand(self.num_examples, self.num_rendered_views, generator = rng).argsort(-1)
+        novel_view_idx = 1 + torch.rand(self.num_examples * self.num_sampled_boxes, self.num_rendered_views, generator = rng).argsort(-1)[..., :self.num_sampled_views].reshape(self.num_examples, -1)
 
-        self.shuffled = torch.cat([example_idx, main_view_idx, novel_view_idx], dim = -1)
+        #self.shuffled = torch.cat([example_idx, main_view_idx, novel_view_idx], dim = -1)
+        self.shuffled = torch.cat([example_idx, novel_view_idx], dim = -1)
         
     def __iter__(self):
         return iter(self.shuffled.tolist())
@@ -45,15 +55,17 @@ class RenderedViewsRandomSampler(torch.utils.data.Sampler):
         return len(self.shuffled)
 
 class RenderedViews(torchvision.datasets.VisionDataset):
-    def __init__(self, root, dataset, ext = '.png'):
+    def __init__(self, root, clustered_rotations_path, dataset, ext = '.jpg'):
         super().__init__(root = root)
         self.dataset = dataset
         self.ext = ext
+        self.clustered_rotations = torch.tensor(list(map(json.load(open(clustered_rotations_path)).get, dataset.categories)), dtype = torch.float32)
 
     def __getitem__(self, idx):
         img, extra = self.dataset[idx[0]]
         view_dir = os.path.join(self.root, extra['shape'])
-        views = torch.stack([torchvision.io.read_image(os.path.join(self.root, extra['image']) if k == 0 else os.path.join(view_dir, f'{k:03}' + self.ext)) for k in idx[1:]])
+        or_jpg = lambda path, ext = '.png': torchvision.io.read_image(path if os.path.exists(path) else path.replace(ext, '.jpg'))
+        views = torch.stack([or_jpg(os.path.join(self.root, extra['image']) if k == 0 else os.path.join(view_dir, f'{k:04}' + self.ext)) for k in idx[1:]])
 
         return img, extra, views
 
@@ -99,7 +111,9 @@ class Pix3D(torchvision.datasets.VisionDataset):
             image = m['img'],
             shape = m['model'], 
             shape_idx = self.shapes[m['model']],
-            category_idx = self.categories.index(m['category']), 
+            category_idx = self.categories.index(m['category']),
+            object_location = m['trans_mat'],
+            object_rotation = m['rot_mat'],
             bbox = bbox
         )
 

@@ -151,7 +151,7 @@ def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_b
         if args.category and category not in args.category:
             continue
 
-        frame_dir = os.path.join(args.output_path, os.path.dirname(model_path))
+        frame_dir = os.path.join(args.output_path, model_path)
         os.makedirs(frame_dir, exist_ok = True)
 
         delete_mesh_objects()    
