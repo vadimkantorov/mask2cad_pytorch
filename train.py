@@ -4,7 +4,7 @@ import argparse
 import datasets
 import models
 
-import scipy.spatial.transform
+import quat
 
 def main(args):
     train_dataset = datasets.Pix3D(args.dataset_root, max_image_size = None)
@@ -15,7 +15,7 @@ def main(args):
     train_data_loader = torch.utils.data.DataLoader(train_dataset, sampler = train_sampler, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
     
     model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
-    model.eval()
+    model.train()
     
     train_sampler.set_epoch(0)
     for batch_idx, batch in enumerate(train_data_loader):
@@ -25,10 +25,10 @@ def main(args):
         bbox = torch.tensor([1, 1, 100, 100], dtype = torch.float32).repeat(args.train_batch_size, args.num_sampled_boxes, 1)
         category_idx = extra['category_idx'].repeat(1, args.num_sampled_boxes)
         shape_idx = extra['shape_idx'].repeat(1, args.num_sampled_boxes)
-        object_rotation_quat = torch.stack([torch.as_tensor(scipy.spatial.transform.Rotation.from_matrix(rot_mat).as_quat(), dtype = torch.float32) for rot_mat in extra['object_rotation']]).repeat(1, args.num_sampled_boxes, 1)
+        object_rotation_quat = quat.from_matrix(extra['object_rotation']).repeat(1, args.num_sampled_boxes, 1)
         object_location = extra['object_location'].repeat(1, args.num_sampled_boxes, 1)
 
-        res = model(img / 255.0, views.expand(-1, -1, 3, -1, -1) / 255.0, category_idx = category_idx, shape_idx = shape_idx, bbox = bbox, object_location = object_location, object_rotation_quat = object_rotation_quat)
+        res = model(img / 255.0, rendered = views.expand(-1, -1, 3, -1, -1) / 255.0, category_idx = category_idx, shape_idx = shape_idx, bbox = bbox, object_location = object_location, object_rotation_quat = object_rotation_quat)
         break
 
 
