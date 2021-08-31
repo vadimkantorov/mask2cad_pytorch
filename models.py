@@ -8,13 +8,30 @@ import torchvision
 import quat
 
 class ShapeRetrieval(nn.Module):
-    def __init__(self, dataset):
+    def __init__(self, model, rendered_views_dataset):
+        super().__init__()
+        self.model = model
+        self.shape_embedding = []
+        self.shape_indices = []
+        for img, extra, views in rendered_views_dataset:
+            self.shape_embedding.extend(model.rendered_view_encoder(views))
+            self.shape_indices.extend(extra['shape_idx'])
+        self.shape_embedding = F.normalize(torch.cat(self.shape_embedding), dim = -1)
+        self.shape_idx = torch.cat(self.shape_idx)
         
-    def forward(self):
-        pass
+    def forward(self, *args, **kwargs):
+        detections = self.model(*args, **kwargs)
+        num_boxes = [len(d['boxes']) for d in detections]
+        shape_embedding = F.normalize(torch.cat([d['shape_embedding'] for d in detections]), dim = -1)
+        shape_idx = (shape_embedding @ self.shape_embedding.transpose(-2, -1)).argmax(dim = -1)
+
+        for d, idx in zip(detections, shape_idx.split(num_boxes)):
+            d['shape_idx'] = idx
+
+        return detections
 
 class Mask2CAD(nn.Module):
-    def __init__(self, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, object_rotation_quat = None):
+    def __init__(self, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, detections_per_image = 8, object_rotation_quat = None):
         super().__init__()
         # TODO: buffer?
         self.object_rotation_quat = object_rotation_quat
@@ -52,14 +69,14 @@ class Mask2CAD(nn.Module):
             img_features = self.object_detector.backbone(images.tensors)
             box_features = self.object_detector.roi_heads.box_roi_pool(img_features, bbox.unbind(), images.image_sizes)
         else:
-            breakpoint()
             detections = self.object_detector(img)
             num_boxes = [len(d['boxes']) for d in detections]
             box_features = self.object_detector.roi_heads.box_roi_pool(*self.object_detector.roi_heads.mask_roi_pool.args)
             mask_logits = self.object_detector.roi_heads.mask_predictor.output
             category_idx = torch.cat([d['labels'] for d in detections])
             mask_probs = self.gather_incomplete(mask_logits, category_idx).sigmoid()
-            box_features =  F.interpolate(box_features, mask_probs.shape[-2:]) * mask_probs.unsqueeze(-3)
+            box_features = F.interpolate(box_features, mask_probs.shape[-2:]) * mask_probs.unsqueeze(-3)
+            bbox = torch.cat([d['boxes'] for d in detections])
         
         Q = bbox.shape[1]
         shape_embedding = self.shape_embedding_branch(box_features).unflatten(0, (B, Q))
@@ -95,12 +112,12 @@ class Mask2CAD(nn.Module):
     
     def compute_rotation_location_targets(self, bbox : 'BQ4', object_location : 'BQ3', object_rotation_quat : 'BQ4', category_idx : 'BQ'):
         anchor_quat = self.object_rotation_quat[category_idx]
-        object_rotation_bins = quatcdist(object_rotation_quat.unsqueeze(-2), anchor_quat).squeeze(-2).argmin(dim = -1)
-        anchor_quat = anchor_quat.gather(-2, object_rotation_bins[:, :, None, None].expand(-1, -1, -1, 4)).squeeze(-2)
+        object_rotation_bins = quat.quatcdist(object_rotation_quat.unsqueeze(-2), anchor_quat).squeeze(-2).argmin(dim = -1)
+        anchor_quat = self.gather_incomplete(anchor_quat, object_rotation_bins)
         
         # x * q = t
         # x = t * q ** -1
-        object_rotation_delta = quatprodinv(anchor_quat, object_rotation_quat)
+        object_rotation_delta = quat.quatprodinv(anchor_quat, object_rotation_quat)
 
         center_x, center_y, width, height = self.xyxy_to_cxcywh(bbox).unbind(dim = -1)
         center_delta = torch.stack([(object_location[..., 0] - center_x) / width, (object_location[..., 1] - center_y) / height], dim = -1)
@@ -142,12 +159,11 @@ class Mask2CAD(nn.Module):
     @staticmethod
     def gather_incomplete(tensor, I):
         return tensor.gather(I.ndim, I[(...,) + (None,) * (tensor.ndim - I.ndim)].expand((-1,) * (I.ndim + 1) + tensor.shape[I.ndim + 1:])).squeeze(I.ndim)
-        
 
 class CacheInputOutput(nn.Module):
-    def __init__(self, module):
+    def __init__(self, model):
         super().__init__()
-        self.module = module
+        self.model = model
         self.output = None
         self.args = ()
         self.kwargs = {}
@@ -155,5 +171,5 @@ class CacheInputOutput(nn.Module):
     def forward(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
-        self.output = self.module(*args, **kwargs)
+        self.output = self.model(*args, **kwargs)
         return self.output
