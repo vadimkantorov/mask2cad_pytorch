@@ -7,8 +7,12 @@ import models
 import quat
 
 def main(args):
-    train_dataset = datasets.Pix3D(args.dataset_root, max_image_size = None)
+    train_dataset = datasets.Pix3D(args.dataset_root, args.train_metadata_path, max_image_size = None)
+    val_rendered_view_dataset = datasets.Pix3D(args.dataset_root, args.train_metadata_path, read_image = False)
+    val_dataset = datasets.Pix3D(args.dataset_root, args.val_metadata_path)
+    
     train_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset)
+    val_rendered_view_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_rendered_view_dataset)
 
     train_sampler = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
 
@@ -17,7 +21,7 @@ def main(args):
     model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
     model.train()
     
-    evaluate(model)
+    evaluate(model, val_dataset = val_dataset, val_rendered_view_dataset = val_rendered_view_dataset)
 
     train_sampler.set_epoch(0)
     for batch_idx, (img, extra, views) in enumerate(train_data_loader):
@@ -35,27 +39,27 @@ def main(args):
             )
         break
 
-def evaluate(model):
-    breakpoint()
-    val_rendered_view_dataset = datasets.Pix3D(args.dataset_root, read_image = False)
-    val_rendered_view_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_rendered_view_dataset)
-    val_rendered_view_sampler = datasets.RenderedViewsSequentialSampler(len(val_rendered_view_dataset), args.num_rendered_views)
+def evaluate(model, *, val_dataset, val_rendered_view_dataset):
+    val_rendered_view_sampler = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_rendered_view_dataset)
     val_rendered_view_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, sampler = val_rendered_view_sampler, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
     
+    breakpoint()
     shape_retrieval = models.ShapeRetrieval(val_rendered_view_data_loader, model.rendered_view_encoder)
     
-    val_dataset = datasets.Pix3D(args.dataset_root)
-    val_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn, shuffle = False)
+    val_data_loader = torch.utils.data.DataLoader(val_dataset, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn, shuffle = False)
 
     model.eval()
     for batch_idx, (img, extra) in enumerate(val_data_loader):
         print(batch_idx)
-        detections = model(img, shape_retrieval = shape_retrieval)
-        breakpoint()
+        
+        object_location = extra['object_location']
+        detections = model(img, object_location = object_location, shape_retrieval = shape_retrieval)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset-root', default = 'data/common/pix3d')
+    parser.add_argument('--train-metadata-path', default = 'data/common/pix3d_splits/pix3d_s1_train.json')
+    parser.add_argument('--val-metadata-path', default = 'data/common/pix3d_splits/pix3d_s1_test.json')
     parser.add_argument('--dataset-rendered-views-root', default = 'data/pix3d_renders')
     parser.add_argument('--dataset-clustered-rotations', default = 'pix3d_clustered_viewpoints.json')
     parser.add_argument('--num-rendered-views', type = int, default = 16)
@@ -68,7 +72,6 @@ if __name__ == '__main__':
     parser.add_argument('--num-epochs', type = int, default = 1000)
     parser.add_argument('--decay-milestones', type = int, nargs = '*', default = [32_000, 40_000])
     parser.add_argument('--decay-gamma', type = float, default = 0.1)
-
     args = parser.parse_args()
 
     main(args)

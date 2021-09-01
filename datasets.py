@@ -6,29 +6,6 @@ import torch.nn.functional as F
 import torchvision
 
 
-def worker_init_fn(worker_id, num_threads = 1):
-    torch.manual_seed(worker_id)
-    #torch.cuda.manual_seed_all(worker_id) if torch.cuda.is_available() else None
-
-def collate_fn(batch):
-    assert batch
-
-    img = torch.stack([b[0] for b in batch])
-    extra = dict(
-        mask = torch.stack([b[1]['mask'] for b in batch]), 
-        category = [b[1]['category'] for b in batch], 
-        shape = [b[1]['shape'] for b in batch], 
-        image = [b[1]['image'] for b in batch], 
-        shape_idx = torch.tensor([b[1]['shape_idx'] for b in batch]), 
-        category_idx = torch.tensor([b[1]['category_idx'] for b in batch]), 
-        bbox = torch.tensor([b[1]['bbox'] for b in batch]),
-        object_location = torch.tensor([b[1]['object_location'] for b in batch]),
-        object_rotation = torch.tensor([b[1]['object_rotation'] for b in batch])
-    )
-    views = (torch.stack([b[2] for b in batch]), ) if len(batch[0]) > 2 else ()
-
-    return (img, extra) + views
-
 class RenderedViewsSequentialSampler(torch.utils.data.Sampler):
     def __init__(self, num_examples, num_rendered_views):
         self.num_examples = num_examples
@@ -77,9 +54,10 @@ class RenderedViews(torchvision.datasets.VisionDataset):
         img, extra = self.dataset[idx[0]]
         view_dir = os.path.join(self.root, extra['shape'])
         or_jpg = lambda path, ext = '.png': torchvision.io.read_image(path if os.path.exists(path) else path.replace(ext, '.jpg'))
-        views = torch.stack([or_jpg(os.path.join(self.root, extra['image']) if k == 0 else os.path.join(view_dir, f'{k:04}' + self.ext)) for k in idx[1:]])
+        no_img = lambda idx: [i for i in idx if i > 0]
+        views = torch.stack([or_jpg(os.path.join(self.root, extra['image']) if k == 0 else os.path.join(view_dir, f'{k:04}' + self.ext)) for k in no_img(idx)])
 
-        return img / 255.0, extra, views.expand(-1, 3, -1, -1) / 255.0
+        return img, extra, views.expand(-1, 3, -1, -1) / 255.0
 
     def __len__(self):
         return len(self.dataset)
@@ -88,14 +66,20 @@ class Pix3D(torchvision.datasets.VisionDataset):
     categories           = ['bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
     categories_coco_inds = [65   , -1        , 63      , -1   , -1    ,  63   , 67     , -1    ,  -1       ]
 
-    def __init__(self, root, metadata_path = None, max_image_size = (640, 480), target_image_size = (320, 240), read_image = True, **kwargs):
+    def __init__(self, root, split_path = None, max_image_size = (640, 480), target_image_size = (320, 240), read_image = True, **kwargs):
         super().__init__(root = root, **kwargs)
         self.target_image_size = target_image_size
         self.read_image = read_image
         metadata_full = json.load(open(os.path.join(root, 'pix3d.json')))
-        self.shapes = {t : i for i, t in enumerate(sorted(set(m['model'] for m in metadata_full)))}
+        self.shape_idx = {t        : i for i, t in enumerate(sorted(set(m['model'] for m in metadata_full)))}
+        self.image_idx = {m['img'] : i for i, m in enumerate(metadata_full)}
+        self.metadata = metadata_full
         
-        self.metadata = json.load(open(metadata_path)) if metadata_path else metadata_full
+        if split_path:
+            split = json.load(open(split_path))
+            images = {i['id'] : dict(img = i['file_name'], img_size = [i['width'], i['height']]) for i in split['images']}
+            self.metadata = [dict(bbox = a['bbox'], mask = a['segmentation'], model = a['model'], rot_mat = a['rot_mat'], trans_mat = a['trans_mat'], category = self.categories[a['category_id'] - 1], **images[a['image_id']]) for a in split['annotations']]
+
         self.metadata = [m for m in self.metadata if m['img_size'][0] <= max_image_size[0] and m['img_size'][1] <= max_image_size[1]] if max_image_size and sum(max_image_size) else self.metadata
 
         categories = [m['category'] for m in self.metadata]
@@ -125,7 +109,8 @@ class Pix3D(torchvision.datasets.VisionDataset):
             category = m['category'], 
             image = m['img'],
             shape = m['model'], 
-            shape_idx = self.shapes[m['model']],
+            image_idx = self.image_idx[m['img']],
+            shape_idx = self.shape_idx[m['model']],
             category_idx = self.categories.index(m['category']),
             object_location = m['trans_mat'],
             object_rotation = m['rot_mat'],
@@ -133,7 +118,30 @@ class Pix3D(torchvision.datasets.VisionDataset):
             bbox = bbox
         )
 
-        return img, extra
+        return img / 255.0, extra
 
     def __len__(self):
         return len(self.metadata)
+
+def collate_fn(batch):
+    assert batch
+
+    img = torch.stack([b[0] for b in batch])
+    extra = dict(
+        mask = torch.stack([b[1]['mask'] for b in batch]), 
+        category = [b[1]['category'] for b in batch], 
+        shape = [b[1]['shape'] for b in batch], 
+        image = [b[1]['image'] for b in batch], 
+        shape_idx = torch.tensor([b[1]['shape_idx'] for b in batch]), 
+        category_idx = torch.tensor([b[1]['category_idx'] for b in batch]), 
+        bbox = torch.tensor([b[1]['bbox'] for b in batch]),
+        object_location = torch.tensor([b[1]['object_location'] for b in batch]),
+        object_rotation = torch.tensor([b[1]['object_rotation'] for b in batch])
+    )
+    views = (torch.stack([b[2] for b in batch]), ) if len(batch[0]) > 2 else ()
+
+    return (img, extra) + views
+
+def worker_init_fn(worker_id, num_threads = 1):
+    torch.manual_seed(worker_id)
+    #torch.cuda.manual_seed_all(worker_id) if torch.cuda.is_available() else None
