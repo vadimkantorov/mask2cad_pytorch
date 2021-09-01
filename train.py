@@ -15,7 +15,7 @@ def main(args):
     train_data_loader = torch.utils.data.DataLoader(train_dataset, sampler = train_sampler, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
     
     model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
-    model.eval()
+    model.train()
     
     train_sampler.set_epoch(0)
     for batch_idx, batch in enumerate(train_data_loader):
