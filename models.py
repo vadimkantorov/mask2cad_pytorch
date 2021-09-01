@@ -8,30 +8,22 @@ import torchvision
 import quat
 
 class ShapeRetrieval(nn.Module):
-    def __init__(self, model, rendered_views_dataset):
+    def __init__(self, rendered_views_dataset, shape_encoder):
         super().__init__()
-        self.model = model
         self.shape_embedding = []
         self.shape_indices = []
         for img, extra, views in rendered_views_dataset:
-            self.shape_embedding.extend(model.rendered_view_encoder(views))
+            self.shape_embedding.extend(shape_encoder(views))
             self.shape_indices.extend(extra['shape_idx'])
         self.shape_embedding = F.normalize(torch.cat(self.shape_embedding), dim = -1)
         self.shape_idx = torch.cat(self.shape_idx)
         
-    def forward(self, *args, **kwargs):
-        detections = self.model(*args, **kwargs)
-        num_boxes = [len(d['boxes']) for d in detections]
-        shape_embedding = F.normalize(torch.cat([d['shape_embedding'] for d in detections]), dim = -1)
-        shape_idx = (shape_embedding @ self.shape_embedding.transpose(-2, -1)).argmax(dim = -1)
-
-        for d, idx in zip(detections, shape_idx.split(num_boxes)):
-            d['shape_idx'] = idx
-
-        return detections
+    def forward(self, shape_embedding):
+        idx = (F.normalize(shape_embedding), dim = -1) @ self.shape_embedding.t()).argmax(dim = -1)
+        return self.shape_idx[idx]
 
 class Mask2CAD(nn.Module):
-    def __init__(self, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None):
+    def __init__(self, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, shape_retrieval = None):
         super().__init__()
         # TODO: buffer?
         self.object_rotation_quat = object_rotation_quat
@@ -63,10 +55,13 @@ class Mask2CAD(nn.Module):
         self.pose_refinement_branch[-1].bias.zero_()
         self.pose_refinement_branch[-1].bias[3::4] = quat_fill # xyzw
 
-    def forward(self, img : 'B3HW', *, rendered : 'BQV3HW', category_idx : 'BQ' = None, shape_idx : 'BQ' = None, bbox : 'BQ4' = None, object_location : 'BQ3' = None, object_rotation_quat : 'BQ4' = None, loss_weights = dict(shape_embedding = 0.5, pose_classification = 0.25, pose_regression = 5.0), P = 4, N = 8):
+    def forward(self, img : 'B3HW', *,
+                rendered : 'B(QV)3HW',
+                category_idx : 'BQ' = None, shape_idx : 'BQ' = None, bbox : 'BQ4' = None, object_location : 'BQ3' = None, object_rotation_quat : 'BQ4' = None,      
+                loss_weights = dict(shape_embedding = 0.5, pose_classification = 0.25, pose_regression = 5.0), P = 4, N = 8,
+                shape_retrieval = None
+        ):
         B = img.shape[0]
-        
-        breakpoint()
         
         if self.training:
             images = self.object_detector.transform(img)[0]
@@ -81,9 +76,7 @@ class Mask2CAD(nn.Module):
             mask_probs = self.index_left(mask_logits, category_idx).sigmoid()
             box_features = F.interpolate(box_features, mask_probs.shape[-2:]) * mask_probs.unsqueeze(-3)
             bbox = torch.cat([d['boxes'] for d in detections])
-            Q = self.num_detections_per_image
         
-        #Q = bbox.shape[1]
         shape_embedding = self.shape_embedding_branch(box_features)
         object_rotation_bins = self.pose_classification_branch(box_features).unflatten(-1, (self.num_categories_with_bg, self.num_rotation_clusters))
         object_rotation_delta = self.pose_refinement_branch(box_features).unflatten(-1, (self.num_categories_with_bg, 4))
@@ -91,12 +84,13 @@ class Mask2CAD(nn.Module):
         #object_rotation_bins, object_rotation_delta, center_delta = [self.index_left(t, category_idx) for t in [object_rotation_bins, object_rotation_delta, center_delta]]
 
         if self.training:
+            Q = category_idx.shape[-1]
             V = rendered.shape[-4] // Q
             rendered_view_features = self.rendered_view_encoder(rendered.flatten(end_dim = -4)).unflatten(0, (B, Q, V))
         
-            target_object_rotation_bins, target_object_rotation_delta, target_center_delta = self.compute_rotation_location_targets(bbox, object_location, object_rotation_quat, category_idx)
-            shape_embedding_loss = self.shape_embedding_loss(shape_embedding, rendered_view_features, category_idx = category_idx, shape_idx = shape_idx, P = P, N = N)
-            pose_classification_loss, pose_regression_loss, center_regression_loss = self.pose_estimation_loss(object_rotation_bins, object_rotation_delta, center_delta, target_object_rotation_bins, target_object_rotation_delta, target_center_delta)
+            target_object_rotation_bins, target_object_rotation_delta, target_center_delta = self.compute_rotation_location_targets(category_idx, bbox, object_location, object_rotation_quat)
+            shape_embedding_loss = self.shape_embedding_loss(shape_embedding.unflatten(0, (B, Q)), rendered_view_features, category_idx = category_idx, shape_idx = shape_idx, P = P, N = N)
+            pose_classification_loss, pose_regression_loss, center_regression_loss = self.pose_estimation_loss(self.index_left(object_rotation_bins.unflatten(0, (B, Q)), category_idx), self.index_left(object_rotation_delta.unflatten(0, (B, Q)), category_idx), self.index_left(center_delta.unflatten(0, (B, Q)), category_idx), target_object_rotation_bins, target_object_rotation_delta, target_center_delta)
             
             loss = loss_weights['shape_embedding'] * shape_embedding_loss + loss_weights['pose_classification'] * pose_classification_loss + loss_weights['pose_regression'] * pose_regression_loss + loss_weights['pose_regression'] * center_regression_loss
             
@@ -109,21 +103,22 @@ class Mask2CAD(nn.Module):
             
             object_location = torch.cat([center_xy + self.index_left(center_delta, category_idx) * width_height, object_location.flatten(end_dim = -2)[..., 2:]], dim = -1)
 
-            for d, l, r, s in zip(detections, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes)):
+            shape_idx = shape_retrieval(shape_embedding) if shape_retrieval is not None else -torch.ones_like(sum(num_boxes))
+
+            for d, l, r, s, i in zip(detections, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes), shape_idx):
                 d['location3d'] = l
                 d['rotation3d_quat'] = r
-                d['shape_embedding'] = s
+                d['shape_embedding'] = s if shape_retrieval is None else None
+                d['shape_idx'] = i if shape_retrieval is not None else None
 
             return detections
     
-    def compute_rotation_location_targets(self, bbox : 'BQ4', object_location : 'BQ3', object_rotation_quat : 'BQ4', category_idx : 'BQ'):
+    def compute_rotation_location_targets(self, category_idx : 'BQ', bbox : 'BQ4', object_location : 'BQ3', object_rotation_quat : 'BQ4'):
         anchor_quat = self.object_rotation_quat[category_idx]
         object_rotation_bins = quat.quatcdist(object_rotation_quat.unsqueeze(-2), anchor_quat).squeeze(-2).argmin(dim = -1)
-        anchor_quat = self.index_left(anchor_quat, object_rotation_bins)
         
-        # x * q = t
-        # x = t * q ** -1
-        object_rotation_delta = quat.quatprodinv(anchor_quat, object_rotation_quat)
+        # x * q = t => x = t * q ** -1
+        object_rotation_delta = quat.quatprodinv(self.index_left(anchor_quat, object_rotation_bins), object_rotation_quat)
 
         center_xy, width_height = self.xyxy_to_cxcywh(bbox).split(2, dim = -1)
         center_delta = (object_location[..., :2] - center_xy) / width_height
