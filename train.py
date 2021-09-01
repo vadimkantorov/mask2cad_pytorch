@@ -17,10 +17,11 @@ def main(args):
     model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
     model.train()
     
+    evaluate(model)
+
     train_sampler.set_epoch(0)
-    for batch_idx, batch in enumerate(train_data_loader):
+    for batch_idx, (img, extra, views) in enumerate(train_data_loader):
         print(batch_idx)
-        img, extra, views = batch
 
         bbox = torch.tensor([1, 1, 100, 100], dtype = torch.float32).repeat(args.train_batch_size, args.num_sampled_boxes, 1)
         category_idx = extra['category_idx'].repeat(1, args.num_sampled_boxes)
@@ -28,10 +29,29 @@ def main(args):
         object_rotation_quat = quat.from_matrix(extra['object_rotation']).repeat(1, args.num_sampled_boxes, 1)
         object_location = extra['object_location'].repeat(1, args.num_sampled_boxes, 1)
 
-        res = model(img / 255.0, rendered = views.expand(-1, -1, 3, -1, -1) / 255.0, category_idx = category_idx, shape_idx = shape_idx, bbox = bbox, object_location = object_location, object_rotation_quat = object_rotation_quat)
+        res = model(img, 
+            rendered = views, 
+            category_idx = category_idx, shape_idx = shape_idx, bbox = bbox, object_location = object_location, object_rotation_quat = object_rotation_quat
+            )
         break
 
-    shape_retrieval_model = models.ShapeRetrieval(model, train_dataset)
+def evaluate(model):
+    breakpoint()
+    val_rendered_view_dataset = datasets.Pix3D(args.dataset_root, read_image = False)
+    val_rendered_view_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_rendered_view_dataset)
+    val_rendered_view_sampler = datasets.RenderedViewsSequentialSampler(len(val_rendered_view_dataset), args.num_rendered_views)
+    val_rendered_view_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, sampler = val_rendered_view_sampler, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
+    
+    shape_retrieval = models.ShapeRetrieval(val_rendered_view_data_loader, model.rendered_view_encoder)
+    
+    val_dataset = datasets.Pix3D(args.dataset_root)
+    val_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn, shuffle = False)
+
+    model.eval()
+    for batch_idx, (img, extra) in enumerate(val_data_loader):
+        print(batch_idx)
+        detections = model(img, shape_retrieval = shape_retrieval)
+        breakpoint()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -41,7 +61,8 @@ if __name__ == '__main__':
     parser.add_argument('--num-rendered-views', type = int, default = 16)
     parser.add_argument('--num-sampled-views', type = int, default = 3)
     parser.add_argument('--num-workers', type = int, default = 0)
-    parser.add_argument('--train-batch-size', type = int, default = 1)
+    parser.add_argument('--train-batch-size', type = int, default = 4)
+    parser.add_argument('--val-batch-size', type = int, default = 4)
     parser.add_argument('--num-sampled-boxes', type = int, default = 8)
     parser.add_argument('--learning-rate', type = float, default = 0.08)
     parser.add_argument('--num-epochs', type = int, default = 1000)

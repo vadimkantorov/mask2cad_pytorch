@@ -8,18 +8,18 @@ import torchvision
 import quat
 
 class ShapeRetrieval(nn.Module):
-    def __init__(self, rendered_views_dataset, shape_encoder):
+    def __init__(self, rendered_views_batches, rendered_view_encoder):
         super().__init__()
         self.shape_embedding = []
         self.shape_indices = []
-        for img, extra, views in rendered_views_dataset:
-            self.shape_embedding.extend(shape_encoder(views))
+        for img, extra, views in rendered_views_batches:
+            self.shape_embedding.extend(rendered_view_encoder(views.flatten(end_dim = -4)))
             self.shape_indices.extend(extra['shape_idx'])
         self.shape_embedding = F.normalize(torch.cat(self.shape_embedding), dim = -1)
         self.shape_idx = torch.cat(self.shape_idx)
         
     def forward(self, shape_embedding):
-        idx = (F.normalize(shape_embedding), dim = -1) @ self.shape_embedding.t()).argmax(dim = -1)
+        idx = (F.normalize(shape_embedding, dim = -1) @ self.shape_embedding.t()).argmax(dim = -1)
         return self.shape_idx[idx]
 
 class Mask2CAD(nn.Module):
