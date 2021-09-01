@@ -37,6 +37,7 @@ class Mask2CAD(nn.Module):
         self.object_rotation_quat = object_rotation_quat
         self.num_rotation_clusters = num_rotation_clusters
         self.num_categories_with_bg = num_categories
+        self.num_detections_per_image = detections_per_image
         
         self.rendered_view_encoder = torchvision.models.resnet18(pretrained = False)
         self.rendered_view_encoder.fc = nn.Linear(self.rendered_view_encoder.fc.in_features, shape_embedding_dim)
@@ -77,6 +78,9 @@ class Mask2CAD(nn.Module):
             mask_probs = self.gather_incomplete(mask_logits, category_idx).sigmoid()
             box_features = F.interpolate(box_features, mask_probs.shape[-2:]) * mask_probs.unsqueeze(-3)
             bbox = torch.cat([d['boxes'] for d in detections])
+            Q = self.num_detections_per_image
+            bbox = bbox.unflatten(0, (B, Q))
+            category_idx = category_idx.unflatten(0, (B, Q))
         
         Q = bbox.shape[1]
         shape_embedding = self.shape_embedding_branch(box_features).unflatten(0, (B, Q))
@@ -99,7 +103,7 @@ class Mask2CAD(nn.Module):
 
         else:
             anchor_quat = self.gather_incomplete(self.object_rotation_quat[category_idx], object_rotation_bins.argmax(dim = -1))
-            object_rotation = quatprod(anchor_quat, object_rotation_delta)
+            object_rotation = quat.quatprod(anchor_quat, object_rotation_delta)
             center_x, center_y, width, height = self.xyxy_to_cxcywh(bbox).unbind(dim = -1)
             object_location = torch.stack([center_x + center_delta[..., 0] * width, center_y + center_delta[..., 1] * height, object_location[..., 2]], dim = -1)
 
