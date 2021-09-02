@@ -3,48 +3,39 @@
 import os
 
 import numpy as np
-import pycocotools.coco
-import pycocotools.mask
+import pycocotools.coco, pycocotools.mask
 from PIL import Image
 
 import torch
 import torch.nn.functional as F
 
-from detectron2.structures import Boxes, BoxMode, pairwise_iou
+import pytorch3d.io, pytorch3d.structures, pytorch3d.utils, pytorch3d.ops 
 
-import pytorch3d.io
-import pytorch3d.structures 
-import pytorch3d.utils
-import pytorch3d.ops 
-
-
-def _eval_predictions():
-
-	mesh = pytorch3d.io.load_obj(f, load_textures=False)
-	object_models[model] = [mesh[0], mesh[1].verts_idx]
+class Pix3DEvaluation:
+    def __init__(self, dataset):
+        self.cocoapi = pycocotools.coco.COCO(json_file)
+        self.mesh_cache = {}
+        for model_path in dataset.shape_idx:
+	        mesh = pytorch3d.io.load_obj(os.path.join(dataset.root, model_path), load_textures=False)
+        	self.mesh_cache[model] = [mesh[0], mesh[1].verts_idx]
 	
-    # use RLE to encode the masks, because they are too large and takes memory
-	# since this evaluator stores outputs of the entire dataset
-	rles = [
-		pycocotools.mask.encode(np.array(mask[:, :, None], order="F", dtype="uint8"))[0]
-		for mask in instances.pred_masks
-	]
-	for rle in rles:
-		# "counts" is an array encoded by mask_util as a byte-stream. Python3's
-		# json writer which always produces strings cannot serialize a bytestream
-		# unless you decode it. Thankfully, utf-8 works out (which is also what
-		# the pycocotools/_mask.pyx does).
-		rle["counts"] = rle["counts"].decode("utf-8")
+    def __call__(self, predictions):
+        # use RLE to encode the masks, because they are too large and takes memory
+        # since this evaluator stores outputs of the entire dataset
+        rles = [
+            pycocotools.mask.encode(np.array(mask[:, :, None], order="F", dtype="uint8"))[0]
+            for mask in instances.pred_masks
+        ]
+        for rle in rles:
+            # "counts" is an array encoded by mask_util as a byte-stream. Python3's
+            # json writer which always produces strings cannot serialize a bytestream
+            # unless you decode it. Thankfully, utf-8 works out (which is also what
+            # the pycocotools/_mask.pyx does).
+            rle["counts"] = rle["counts"].decode("utf-8")
 
-	instances.pred_masks_rle = rles
-	
-    results = evaluate_for_pix3d(
-		self._predictions,
-		pycocotools.coco.COCO(json_file),
-		load_unique_meshes(json_file, model_root),
-	)
-
-	# print results
+        instances.pred_masks_rle = rles
+        
+        return evaluate_for_pix3d(predictions, self.cocoapi, self.mesh_cache)
 
 def evaluate_for_pix3d(
     predictions,
@@ -141,16 +132,16 @@ def evaluate_for_pix3d(
 
         # get original ground truth mask, box, label & mesh
         maskfile = os.path.join(image_root, gt_anns["segmentation"])
-        with PathManager.open(maskfile, "rb") as f:
+        with open(maskfile, "rb") as f:
             gt_mask = torch.tensor(np.asarray(Image.open(f), dtype=np.float32) / 255.0)
         assert gt_mask.shape[0] == image_height and gt_mask.shape[1] == image_width
 
         gt_mask = (gt_mask > 0).to(dtype=torch.uint8)  # binarize mask
         gt_mask_rle = [pycocotools.mask.encode(np.array(gt_mask[:, :, None], order="F"))[0]]
         gt_box = np.array(gt_anns["bbox"]).reshape(-1, 4)  # xywh from coco
-        gt_box = BoxMode.convert(gt_box, BoxMode.XYWH_ABS, BoxMode.XYXY_ABS)
+        gt_box = BoxMode_convert_BoxMode_XYWH_ABS__BoxMode_XYXY_ABS(gt_box)
         gt_label = gt_anns["category_id"]
-        faux_gt_targets = Boxes(torch.tensor(gt_box, dtype=torch.float32, device=device))
+        faux_gt_targets = torch.tensor(gt_box, dtype=torch.float32, device=device)
 
         # load gt mesh and extrinsics/intrinsics
         gt_R = torch.tensor(gt_anns["rot_mat"]).to(device)
@@ -167,7 +158,7 @@ def evaluate_for_pix3d(
         else:
             # load from disc
             raise NotImplementedError
-        gt_verts = shape_utils.transform_verts(gt_verts, gt_R, gt_t)
+        gt_verts = transform_verts(gt_verts, gt_R, gt_t)
         gt_zrange = torch.stack([gt_verts[:, 2].min(), gt_verts[:, 2].max()])
         gt_mesh = pytorch3d.structures.Meshes(verts=[gt_verts], faces=[gt_faces])
 
@@ -540,6 +531,28 @@ def _center_and_normalize_points(points):
 
     return matrix, new_points
 
+def transform_verts(verts, R, t):
+    """
+    Transforms verts with rotation R and translation t
+    Inputs:
+        - verts (tensor): of shape (N, 3)
+        - R (tensor): of shape (3, 3) or None
+        - t (tensor): of shape (3,) or None
+    Outputs:
+        - rotated_verts (tensor): of shape (N, 3)
+    """
+    rot_verts = verts.clone().t()
+    if R is not None:
+        assert R.dim() == 2
+        assert R.size(0) == 3 and R.size(1) == 3
+        rot_verts = torch.mm(R, rot_verts)
+    if t is not None:
+        assert t.dim() == 1
+        assert t.size(0) == 3
+        rot_verts = rot_verts + t.unsqueeze(1)
+    rot_verts = rot_verts.t()
+    return rot_verts
+
 def box2D_to_cuboid3D(zranges, Ks, boxes, im_sizes):
     device = boxes.device
     if boxes.shape[0] != Ks.shape[0] != zranges.shape[0]:
@@ -872,3 +885,60 @@ class VOCap:
 		for i in I:
 			ap = ap + (mrec[i] - mrec[i - 1]) * mpre[i]
 		return ap
+
+# implementation from https://github.com/kuangliu/torchcv/blob/master/torchcv/utils/box.py
+# with slight modifications
+def pairwise_iou(boxes1, boxes2) -> torch.Tensor:
+    """
+    Given two lists of boxes of size N and M, compute the IoU
+    (intersection over union) between **all** N x M pairs of boxes.
+    The box order must be (xmin, ymin, xmax, ymax).
+    Args:
+        boxes1,boxes2 (Boxes): two `Boxes`. Contains N & M boxes, respectively.
+    Returns:
+        Tensor: IoU, sized [N,M].
+    """
+    area1 = area(boxes1)  # [N]
+    area2 = area(boxes2)  # [M]
+    inter = pairwise_intersection(boxes1, boxes2)
+
+    # handle empty boxes
+    iou = torch.where(
+        inter > 0,
+        inter / (area1[:, None] + area2 - inter),
+        torch.zeros(1, dtype=inter.dtype, device=inter.device),
+    )
+    return iou
+
+def pairwise_intersection(boxes1, boxes2) -> torch.Tensor:
+    """
+    Given two lists of boxes of size N and M,
+    compute the intersection area between __all__ N x M pairs of boxes.
+    The box order must be (xmin, ymin, xmax, ymax)
+    Args:
+        boxes1,boxes2 (Boxes): two `Boxes`. Contains N & M boxes, respectively.
+    Returns:
+        Tensor: intersection, sized [N,M].
+    """
+    width_height = torch.min(boxes1[:, None, 2:], boxes2[:, 2:]) - torch.max(
+        boxes1[:, None, :2], boxes2[:, :2]
+    )  # [N,M,2]
+
+    width_height.clamp_(min=0)  # [N,M,2]
+    intersection = width_height.prod(dim=2)  # [N,M]
+    return intersection
+
+def area(box) -> torch.Tensor:
+	"""
+	Computes the area of all the boxes.
+	Returns:
+		torch.Tensor: a vector with areas of each box.
+	"""
+	area = (box[:, 2] - box[:, 0]) * (box[:, 3] - box[:, 1])
+	return area
+
+def BoxMode_convert_BoxMode_XYWH_ABS__BoxMode_XYXY_ABS(box):
+	arr = box.clone()
+	arr[:, 2] += arr[:, 0]
+	arr[:, 3] += arr[:, 1]
+	return arr
