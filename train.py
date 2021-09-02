@@ -27,11 +27,11 @@ def main(args):
     for batch_idx, (img, extra, views) in enumerate(train_data_loader):
         print(batch_idx)
 
-        bbox = torch.tensor([1, 1, 100, 100], dtype = torch.float32).repeat(args.train_batch_size, args.num_sampled_boxes, 1)
+        bbox = extra['bbox'].repeat(1, args.num_sampled_boxes, 1)
         category_idx = extra['category_idx'].repeat(1, args.num_sampled_boxes)
         shape_idx = extra['shape_idx'].repeat(1, args.num_sampled_boxes)
-        object_rotation_quat = quat.from_matrix(extra['object_rotation']).repeat(1, args.num_sampled_boxes, 1)
         object_location = extra['object_location'].repeat(1, args.num_sampled_boxes, 1)
+        object_rotation_quat = quat.from_matrix(extra['object_rotation']).repeat(1, args.num_sampled_boxes, 1)
 
         res = model(img, 
             rendered = views, 
@@ -43,17 +43,17 @@ def evaluate(model, *, val_dataset, val_rendered_view_dataset):
     val_rendered_view_sampler = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_rendered_view_dataset)
     val_rendered_view_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, sampler = val_rendered_view_sampler, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
     
-    breakpoint()
-    shape_retrieval = models.ShapeRetrieval(val_rendered_view_data_loader, model.rendered_view_encoder)
-    
     val_data_loader = torch.utils.data.DataLoader(val_dataset, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn, shuffle = False)
+    
+    shape_retrieval = models.ShapeRetrieval(val_rendered_view_data_loader, model.rendered_view_encoder)
 
     model.eval()
     for batch_idx, (img, extra) in enumerate(val_data_loader):
         print(batch_idx)
         
-        object_location = extra['object_location']
-        detections = model(img, object_location = object_location, shape_retrieval = shape_retrieval)
+        bbox = extra['bbox'].unsqueeze(-2)
+        category_idx = extra['category_idx'].unsqueeze(-1)
+        detections = model(img, bbox = bbox, category_idx = category_idx, shape_retrieval = shape_retrieval)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -72,6 +72,7 @@ if __name__ == '__main__':
     parser.add_argument('--num-epochs', type = int, default = 1000)
     parser.add_argument('--decay-milestones', type = int, nargs = '*', default = [32_000, 40_000])
     parser.add_argument('--decay-gamma', type = float, default = 0.1)
+    parser.add_argument('--device', default = 'cpu')
     args = parser.parse_args()
 
     main(args)
