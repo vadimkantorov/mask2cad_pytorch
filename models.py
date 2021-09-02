@@ -10,12 +10,12 @@ import quat
 class ShapeRetrieval(nn.Module):
     def __init__(self, rendered_view_batches, rendered_view_encoder):
         super().__init__()
-        self.shape_embedding, self.shape_idx = zip(*[(rendered_view_encoder(views.flatten(end_dim = -4)), extra['shape_idx'].repeat(1, views.shape[-4]).flatten()) for img, extra, views in rendered_view_batches])
-        self.shape_embedding, self.shape_idx = F.normalize(torch.cat(self.shape_embedding), dim = -1), torch.cat(self.shape_idx)
+        self.shape_embedding, self.category_idx, self.shape_idx = zip(*[(rendered_view_encoder(views.flatten(end_dim = -4)), extra['category_idx'].repeat(1, views.shape[-4]).flatten(), extra['shape_idx'].repeat(1, views.shape[-4]).flatten()  ) for img, extra, views in rendered_view_batches])
+        self.shape_embedding, self.category_idx, self.shape_idx = F.normalize(torch.cat(self.shape_embedding), dim = -1), torch.cat(self.category_idx), torch.cat(self.shape_idx)
         
     def forward(self, shape_embedding):
         idx = (F.normalize(shape_embedding, dim = -1) @ self.shape_embedding.t()).argmax(dim = -1)
-        return self.shape_idx[idx]
+        return self.category_idx[idx], self.shape_idx[idx]
 
 class Mask2CAD(nn.Module):
     def __init__(self, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, shape_retrieval = None):
@@ -99,7 +99,7 @@ class Mask2CAD(nn.Module):
             center_xy, width_height = self.xyxy_to_cxcywh(bbox).split(2, dim = -1)
             object_location = center_xy + self.index_left(center_delta, category_idx) * width_height
 
-            shape_idx = shape_retrieval(shape_embedding) if shape_retrieval is not None else -torch.ones_like(sum(num_boxes))
+            shape_idx = shape_retrieval(shape_embedding)[0] if shape_retrieval is not None else -torch.ones_like(sum(num_boxes))
 
             num_boxes = [len(d['boxes']) for d in detections]
             for d, l, r, s, i in zip(detections, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes), shape_idx):
