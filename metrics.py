@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import copy
-import io
-import itertools
-import json
 import os
 
 import numpy as np
