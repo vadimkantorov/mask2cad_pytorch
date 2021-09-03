@@ -1,5 +1,6 @@
 import os
 import json
+import collections
 import torch
 import torch.utils.data
 import torch.nn.functional as F
@@ -66,25 +67,34 @@ class Pix3D(torchvision.datasets.VisionDataset):
     categories           = ['bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
     categories_coco_inds = [65   , -1        , 63      , -1   , -1    ,  63   , 67     , -1    ,  -1       ]
 
-    def __init__(self, root, split_path = None, max_image_size = (640, 480), target_image_size = (320, 240), read_image = True, **kwargs):
+    def __init__(self, root, split_path = None, max_image_size = (640, 480), target_image_size = (320, 240), drop_images = ['img/table/1749.jpg', 'img/table/0045.png'], read_image = True, **kwargs):
         super().__init__(root = root, **kwargs)
         self.target_image_size = target_image_size
         self.read_image = read_image
         metadata_full = json.load(open(os.path.join(root, 'pix3d.json')))
-        self.shape_idx = {t        : i for i, t in enumerate(sorted(set(m['model'] for m in metadata_full)))}
-        self.image_idx = {m['img'] : i for i, m in enumerate(metadata_full)}
-        self.metadata = metadata_full
         
+        assert set(collections.Counter(m['img'] for m in metadata_full).values()) == {1}
+        
+        self.shape_idx = {t        : i for i, t in enumerate(sorted(set(m['model'] for m in metadata_full)))}
+        self.image_idx = {m['img'] : dict(i = i, file_name = m['img'], width = m['img_size'][0], height = m['img_size'][1]) for i, m in enumerate(metadata_full)}
+        self.category_idx = {category : i for i, category in enumerate(self.categories)}
+
         if split_path:
             split = json.load(open(split_path))
             images = {i['id'] : dict(img = i['file_name'], img_size = [i['width'], i['height']]) for i in split['images']}
-            self.metadata = [dict(bbox = a['bbox'], mask = a['segmentation'], model = a['model'], rot_mat = a['rot_mat'], trans_mat = a['trans_mat'], category = self.categories[a['category_id'] - 1], **images[a['image_id']]) for a in split['annotations']]
+            self.metadata = [dict(bbox = a['bbox'][:2] + [a['bbox'][0] + a['bbox'][2] - 1, a['bbox'][1] + a['bbox'][3] - 1], mask = a['segmentation'], model = a['model'], rot_mat = a['rot_mat'], trans_mat = a['trans_mat'], category = self.categories[a['category_id'] - 1], K0 = a['K'][0], **images[a['image_id']]) for a in split['annotations']]
+        else:
+            self.metadata = metadata_full
+            # K0 missing
 
-        self.metadata = [m for m in self.metadata if m['img_size'][0] <= max_image_size[0] and m['img_size'][1] <= max_image_size[1]] if max_image_size and sum(max_image_size) else self.metadata
 
-        categories = [m['category'] for m in self.metadata]
-        self.num_metadata = {category : categories.count(category) for category in self.categories}
         
+        assert all(m['bbox'][0] <= m['bbox'][2] and m['bbox'][1] <= m['bbox'][3] for m in self.metadata)
+
+        drop_image_sizes = max_image_size and sum(max_image_size)
+        self.metadata = [m for m in self.metadata if (m['img'] not in drop_images) and (not drop_image_size or (m['img_size'][0] <= max_image_size[0] and m['img_size'][1] <= max_image_size[1]))] 
+
+        self.num_by_category = collections.Counter(self.category_idx[m['category']] for m in self.metadata)
         self.width_min_max  = (min(m['img_size'][0] for m in self.metadata), max(m['img_size'][0] for m in self.metadata))
         self.height_min_max = (min(m['img_size'][1] for m in self.metadata), max(m['img_size'][1] for m in self.metadata))
 
@@ -109,9 +119,9 @@ class Pix3D(torchvision.datasets.VisionDataset):
             category = m['category'], 
             image = m['img'],
             shape = m['model'], 
-            image_idx = self.image_idx[m['img']],
+            image_idx = self.image_idx[m['img']]['i'],
             shape_idx = self.shape_idx[m['model']],
-            category_idx = self.categories.index(m['category']),
+            category_idx = self.category_idx[m['category']],
             object_location = m['trans_mat'],
             object_rotation = m['rot_mat'],
             img_width_height = img_size,

@@ -1,10 +1,11 @@
 import torch
 import torch.utils.data
 import argparse
-import datasets
-import models
 
 import quat
+import datasets
+import models
+import metrics
 
 def main(args):
     train_dataset = datasets.Pix3D(args.dataset_root, args.train_metadata_path, max_image_size = None)

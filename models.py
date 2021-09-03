@@ -99,7 +99,7 @@ class Mask2CAD(nn.Module):
             center_xy, width_height = self.xyxy_to_cxcywh(bbox).split(2, dim = -1)
             object_location = center_xy + self.index_left(center_delta, category_idx) * width_height
 
-            shape_idx = shape_retrieval(shape_embedding)[0] if shape_retrieval is not None else -torch.ones_like(sum(num_boxes))
+            shape_idx = shape_retrieval(shape_embedding)[1] if shape_retrieval is not None else -torch.ones_like(sum(num_boxes))
 
             num_boxes = [len(d['boxes']) for d in detections]
             for d, l, r, s, i in zip(detections, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes), shape_idx):
