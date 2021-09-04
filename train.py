@@ -7,18 +7,42 @@ import datasets
 import models
 import metrics
 
+import os
+import pytorch3d.io
+
 def main(args):
     train_dataset = datasets.Pix3D(args.dataset_root, args.train_metadata_path, max_image_size = None)
     val_rendered_view_dataset = datasets.Pix3D(args.dataset_root, args.train_metadata_path, read_image = False)
-    val_dataset = datasets.Pix3D(args.dataset_root, args.val_metadata_path)
     
+    val_dataset = datasets.Pix3D(args.dataset_root, args.val_metadata_path, read_image = False, read_mask = True, target_image_size = None)
+    val_evaluator = metrics.Pix3DEvaluator(val_dataset)
+    
+    val_evaluator.clear()
+    for img, extra in val_dataset:
+        image_id = extra['image']
+        pred_boxes = torch.tensor(extra['bbox'])[None]
+        scores = torch.ones(1)
+        pred_classes = torch.tensor([extra['category_idx']])[None]
+        pred_masks = extra['mask']
+        
+        gt_mesh = pytorch3d.io.load_obj(os.path.join(val_dataset.root, extra['shape']), load_textures = False)
+        pred_meshes = [(gt_mesh[0], gt_mesh[1].verts_idx)] 
+        pred_dz = torch.tensor([0.3])[None]
+        
+        val_evaluator.append(image_id, scores = scores, pred_boxes = pred_boxes, pred_classes = pred_classes, pred_masks = pred_masks, pred_meshes = pred_meshes, pred_dz = pred_dz)
+    
+    results = val_evaluator()
+    print(results)
+    return
+    
+
     train_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset)
     val_rendered_view_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_rendered_view_dataset)
 
     train_sampler = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
 
     train_data_loader = torch.utils.data.DataLoader(train_dataset, sampler = train_sampler, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
-    
+
     model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
     model.train()
     
