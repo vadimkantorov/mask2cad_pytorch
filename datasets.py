@@ -82,10 +82,9 @@ class Pix3D(torchvision.datasets.VisionDataset):
         if split_path:
             split = json.load(open(split_path))
             images = {i['id'] : dict(img = i['file_name'], img_size = [i['width'], i['height']]) for i in split['images']}
-            self.metadata = [dict(bbox = a['bbox'][:2] + [a['bbox'][0] + a['bbox'][2] - 1, a['bbox'][1] + a['bbox'][3] - 1], mask = a['segmentation'], model = a['model'], rot_mat = a['rot_mat'], trans_mat = a['trans_mat'], category = self.categories[a['category_id'] - 1], K0 = a['K'][0], **images[a['image_id']]) for a in split['annotations']]
+            self.metadata = [dict(bbox = a['bbox'][:2] + [a['bbox'][0] + a['bbox'][2] - 1, a['bbox'][1] + a['bbox'][3] - 1], mask = a['segmentation'], model = a['model'], rot_mat = a['rot_mat'], trans_mat = a['trans_mat'], category = self.categories[a['category_id'] - 1], **images[a['image_id']]) for a in split['annotations']]
         else:
             self.metadata = metadata_full
-            # K0 missing
 
         assert all(m['bbox'][0] <= m['bbox'][2] and m['bbox'][1] <= m['bbox'][3] for m in self.metadata)
 
