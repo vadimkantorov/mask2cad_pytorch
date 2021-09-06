@@ -203,9 +203,6 @@ class MetricLogger(object):
             header, total_time_str, total_time / len(iterable)))
 
 
-def collate_fn(batch):
-    return tuple(zip(*batch))
-
 
 def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
 
@@ -217,13 +214,6 @@ def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, f)
 
-
-def mkdir(path):
-    try:
-        os.makedirs(path)
-    except OSError as e:
-        if e.errno != errno.EEXIST:
-            raise
 
 
 def setup_for_distributed(is_master):

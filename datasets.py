@@ -6,7 +6,6 @@ import torch.utils.data
 import torch.nn.functional as F
 import torchvision
 
-
 class RenderedViewsSequentialSampler(torch.utils.data.Sampler):
     def __init__(self, num_examples, num_rendered_views):
         self.num_examples = num_examples
@@ -67,11 +66,12 @@ class Pix3D(torchvision.datasets.VisionDataset):
     categories           = ['bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
     categories_coco_inds = [65   , -1        , 63      , -1   , -1    ,  63   , 67     , -1    ,  -1       ]
 
-    def __init__(self, root, split_path = None, max_image_size = (640, 480), target_image_size = (320, 240), drop_images = ['img/table/1749.jpg', 'img/table/0045.png'], read_image = True, read_mask = True, **kwargs):
-        super().__init__(root = root, **kwargs)
+    def __init__(self, root, split_path = None, max_image_size = None, target_image_size = (320, 240), drop_images = ['img/table/1749.jpg', 'img/table/0045.png'], read_image = True, read_mask = True, transforms = [], **kwargs):
+        super().__init__(root = root, transforms = transforms, **kwargs)
         self.target_image_size = target_image_size
         self.read_image = read_image
         self.read_mask = read_mask
+        self.transforms = transforms
         metadata_full = json.load(open(os.path.join(root, 'pix3d.json')))
         
         assert set(collections.Counter(m['img'] for m in metadata_full).values()) == {1}
@@ -112,21 +112,38 @@ class Pix3D(torchvision.datasets.VisionDataset):
             #mask = F.interpolate(img.unsqueeze(0), scale_factor = scale_factor).squeeze(0)
             bbox = [bbox[0] * scale_factor, bbox[1] * scale_factor, bbox[2] * scale_factor, bbox[3] * scale_factor]
         
-        extra = dict(
-            mask = (mask == 255), 
-            category = m['category'], 
-            image = m['img'],
-            shape = m['model'],
-            mask_path = m['mask'],
-            shape_idx = self.shape_idx[m['model']],
-            category_idx = self.category_idx[m['category']],
-            object_location = m['trans_mat'],
-            object_rotation = m['rot_mat'],
-            img_width_height = img_size,
-            bbox = bbox
-        )
+        bbox = bbox.unsqueeze(0)
+        area = (bbox[..., 2] - bbox[..., 0]) * (bbox[..., 3] - bbox[..., 1])
+        iscrowd = torch.zeros(len(bbox), dtype = torch.uint8)
+        labels = torch.tensor(self.category_idx[m['category']]).unsqueeze(0)
+        masks = (mask == 255).unsqueeze(0)
+        object_location = torch.as_tensor(m['trans_mat'], dtype = torch.float64).unsqueeze(0)
+        object_rotation = torch.as_tensor(m['rot_mat'], dtype = torch.float64).unsqueeze(0)
+        shape_idx = torch.tensor(self.shape_idx[m['model']]).unsqueeze(0)
 
-        return img / 255.0, extra
+        img = img / 255.0
+        target = dict(
+            image_id = m['img'],
+            shape_path = m['model'],
+            mask_path = m['mask'],
+            category = m['category'], 
+            
+            boxes = bbox,
+            area = area,
+            iscrowd = iscrowd,
+            labels = labels,
+            masks = masks, 
+
+            image_width_height = img_size,
+            shape_idx = shape_idx,
+            object_location = object_location,
+            object_rotation = object_rotaiton
+        )
+        
+        if self.transforms is not None:
+            img, target = self.transforms(img, target)
+
+        return img, target
 
     def __len__(self):
         return len(self.metadata)
@@ -141,11 +158,11 @@ def collate_fn(batch):
         shape = [b[1]['shape'] for b in batch], 
         image = [b[1]['image'] for b in batch], 
         mask_path = [b[1]['mask_path'] for b in batch], 
-        shape_idx = torch.tensor([b[1]['shape_idx'] for b in batch]), 
-        category_idx = torch.tensor([b[1]['category_idx'] for b in batch]), 
-        bbox = torch.tensor([b[1]['bbox'] for b in batch]),
-        object_location = torch.tensor([b[1]['object_location'] for b in batch]),
-        object_rotation = torch.tensor([b[1]['object_rotation'] for b in batch])
+        shape_idx = torch.tstack([b[1]['shape_idx'] for b in batch]), 
+        category_idx = torch.stack([b[1]['category_idx'] for b in batch]), 
+        bbox = torch.stack([b[1]['bbox'] for b in batch]),
+        object_location = torch.stack([b[1]['object_location'] for b in batch]),
+        object_rotation = torch.stack([b[1]['object_rotation'] for b in batch])
     )
     views = (torch.stack([b[2] for b in batch]), ) if len(batch[0]) > 2 else ()
 
