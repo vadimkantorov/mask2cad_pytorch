@@ -82,18 +82,6 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
     return metric_logger
 
 
-def _get_iou_types(model):
-    model_without_ddp = model
-    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-        model_without_ddp = model.module
-    iou_types = ['bbox']
-    if isinstance(model_without_ddp, torchvision.models.detection.MaskRCNN):
-        iou_types.append('segm')
-    if isinstance(model_without_ddp, torchvision.models.detection.KeypointRCNN):
-        iou_types.append('keypoints')
-    return iou_types
-
-
 @torch.no_grad()
 def evaluate(model, data_loader, device):
     n_threads = torch.get_num_threads()
@@ -105,7 +93,7 @@ def evaluate(model, data_loader, device):
     header = 'Test:'
 
     coco = get_coco_api_from_dataset(data_loader.dataset)
-    iou_types = _get_iou_types(model)
+    iou_types = ['bbox', 'segm']
     coco_evaluator = CocoEvaluator(coco, iou_types)
 
     for images, targets in metric_logger.log_every(data_loader, 100, header):
@@ -160,13 +148,13 @@ def main(args):
         val_sampler = torch.utils.data.SequentialSampler(val_dataset)
 
     if args.aspect_ratio_group_factor >= 0:
-        group_ids = samplers.create_aspect_ratio_groups(train_dataset, k = args.aspect_ratio_group_factor)
-        train_batch_sampler = samplers.GroupedBatchSampler(train_sampler, group_ids, args.batch_size)
+        group_ids = samplers.create_aspect_ratio_groups(train_dataset.aspect_ratios.tolist(), k = args.aspect_ratio_group_factor)
+        train_batch_sampler = samplers.GroupedBatchSampler(train_sampler, group_ids, args.train_batch_size)
     else:
-        train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
+        train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
 
-    train_data_loader  =  torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.workers, collate_fn = datasets.collate_fn)
-    val_data_loader  =  torch.utils.data.DataLoader(val_dataset, batch_size = 1, sampler = val_sampler, num_workers = args.workers, collate_fn = datasets.collate_fn)
+    train_data_loader  =  torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
+    val_data_loader  =  torch.utils.data.DataLoader(val_dataset, batch_size = 1, sampler = val_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
 
     kwargs = {
         'trainable_backbone_layers': args.trainable_backbone_layers
@@ -200,7 +188,7 @@ def main(args):
         args.start_epoch = checkpoint['epoch'] + 1
 
     if args.test_only:
-        evaluate(model, val_data_loader, device=device)
+        evaluate(model, val_data_loader, device=args.device)
         return
 
     print('Start training')
@@ -208,7 +196,7 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        train_one_epoch(model, optimizer, train_data_loader, device, epoch, args.print_freq)
+        train_one_epoch(model, optimizer, train_data_loader, args.device, epoch, args.print_freq)
         lr_scheduler.step()
         if args.output_dir:
             checkpoint = dict(
@@ -243,9 +231,9 @@ if __name__ == '__main__':
     
     parser.add_argument('--model', default='maskrcnn_resnet50_fpn')
     parser.add_argument('--device', default='cpu', help='device')
-    parser.add_argument('--batch-size', '-b', default=2, type=int, help='images per gpu, the total batch size is $NGPU x batch_size')
+    parser.add_argument('--train-batch-size', default=2, type=int, help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('--epochs', default=26, type=int)
-    parser.add_argument( '--num-workers', '-j', default=4, type=int)
+    parser.add_argument( '--num-workers', '-j', default=0, type=int)
     parser.add_argument('--lr', default=0.02, type=float, help='initial learning rate, 0.02 is the default value for training on 8 gpus and 2 images_per_gpu')
     parser.add_argument('--momentum', default=0.9, type=float)
     parser.add_argument('--weight-decay', default=1e-4, type=float)

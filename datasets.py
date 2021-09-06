@@ -91,10 +91,11 @@ class Pix3D(torchvision.datasets.VisionDataset):
         drop_image_size = max_image_size and sum(max_image_size)
         self.metadata = [m for m in self.metadata if (m['img'] not in drop_images) and (not drop_image_size or (m['img_size'][0] <= max_image_size[0] and m['img_size'][1] <= max_image_size[1]))] 
 
+        self.image_idx = {m['img'] : dict(m = m, file_name = m['img'], width = m['img_size'][0], height = m['img_size'][1]) for i, m in enumerate(self.metadata)}
         self.num_by_category = collections.Counter(self.category_idx[m['category']] for m in self.metadata)
         self.width_min_max  = (min(m['img_size'][0] for m in self.metadata), max(m['img_size'][0] for m in self.metadata))
         self.height_min_max = (min(m['img_size'][1] for m in self.metadata), max(m['img_size'][1] for m in self.metadata))
-        self.image_idx = {m['img'] : dict(m = m, file_name = m['img'], width = m['img_size'][0], height = m['img_size'][1]) for i, m in enumerate(self.metadata)}
+        self.aspect_ratios = torch.tensor([m['img_size'][0] / m['img_size'][1] for m in self.metadata], dtype = torch.float32)
 
     def __getitem__(self, idx):
         m = self.metadata[idx]
@@ -112,7 +113,7 @@ class Pix3D(torchvision.datasets.VisionDataset):
             #mask = F.interpolate(img.unsqueeze(0), scale_factor = scale_factor).squeeze(0)
             bbox = [bbox[0] * scale_factor, bbox[1] * scale_factor, bbox[2] * scale_factor, bbox[3] * scale_factor]
         
-        bbox = bbox.unsqueeze(0)
+        bbox = torch.tensor(bbox).unsqueeze(0)
         area = (bbox[..., 2] - bbox[..., 0]) * (bbox[..., 3] - bbox[..., 1])
         iscrowd = torch.zeros(len(bbox), dtype = torch.uint8)
         labels = torch.tensor(self.category_idx[m['category']]).unsqueeze(0)
@@ -137,10 +138,10 @@ class Pix3D(torchvision.datasets.VisionDataset):
             image_width_height = img_size,
             shape_idx = shape_idx,
             object_location = object_location,
-            object_rotation = object_rotaiton
+            object_rotation = object_rotation
         )
         
-        if self.transforms is not None:
+        if self.transforms:
             img, target = self.transforms(img, target)
 
         return img, target
