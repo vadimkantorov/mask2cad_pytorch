@@ -154,14 +154,14 @@ def collate_fn(batch):
 
     img = torch.stack([b[0] for b in batch])
     extra = dict(
-        mask = torch.stack([b[1]['mask'] for b in batch]), 
+        masks = torch.stack([b[1]['masks'] for b in batch]), 
         category = [b[1]['category'] for b in batch], 
-        shape = [b[1]['shape'] for b in batch], 
-        image = [b[1]['image'] for b in batch], 
+        shape_path = [b[1]['shape_path'] for b in batch], 
+        image_id = [b[1]['image_id'] for b in batch], 
         mask_path = [b[1]['mask_path'] for b in batch], 
-        shape_idx = torch.tstack([b[1]['shape_idx'] for b in batch]), 
-        category_idx = torch.stack([b[1]['category_idx'] for b in batch]), 
-        bbox = torch.stack([b[1]['bbox'] for b in batch]),
+        shape_idx = torch.stack([b[1]['shape_idx'] for b in batch]), 
+        labels = torch.stack([b[1]['labels'] for b in batch]), 
+        boxes = torch.stack([b[1]['boxes'] for b in batch]),
         object_location = torch.stack([b[1]['object_location'] for b in batch]),
         object_rotation = torch.stack([b[1]['object_rotation'] for b in batch])
     )

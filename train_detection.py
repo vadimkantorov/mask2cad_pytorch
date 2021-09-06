@@ -53,7 +53,8 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
 
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        breakpoint()
+        targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
 
         loss_dict = model(images, targets)
 
@@ -138,7 +139,6 @@ def main(args):
     val_dataset = datasets.Pix3D(args.dataset_root, split_path = args.val_metadata_path)
     
     num_classes = len(train_dataset.categories)
-    breakpoint()
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -152,9 +152,10 @@ def main(args):
         train_batch_sampler = samplers.GroupedBatchSampler(train_sampler, group_ids, args.train_batch_size)
     else:
         train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
-
-    train_data_loader  =  torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
-    val_data_loader  =  torch.utils.data.DataLoader(val_dataset, batch_size = 1, sampler = val_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
+    
+    collate_fn = lambda batch: tuple(zip(*batch))
+    train_data_loader  =  torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = collate_fn)
+    val_data_loader  =  torch.utils.data.DataLoader(val_dataset, batch_size = 1, sampler = val_sampler, num_workers = args.num_workers, collate_fn = collate_fn)
 
     kwargs = {
         'trainable_backbone_layers': args.trainable_backbone_layers
