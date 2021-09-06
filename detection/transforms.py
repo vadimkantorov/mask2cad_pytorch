@@ -6,6 +6,40 @@ from torchvision.transforms import functional as F
 from torchvision.transforms import transforms as T
 from typing import List, Tuple, Dict, Optional
 
+class DetectionPresetTrain:
+    def __init__(self, data_augmentation, hflip_prob=0.5, mean=(123., 117., 104.)):
+        if data_augmentation == 'hflip':
+            self.transforms = T.Compose([
+                RandomHorizontalFlip(p=hflip_prob),
+                ToTensor(),
+            ])
+        elif data_augmentation == 'ssd':
+            self.transforms = T.Compose([
+                RandomPhotometricDistort(),
+                RandomZoomOut(fill=list(mean)),
+                RandomIoUCrop(),
+                RandomHorizontalFlip(p=hflip_prob),
+                ToTensor(),
+            ])
+        elif data_augmentation == 'ssdlite':
+            self.transforms = T.Compose([
+                RandomIoUCrop(),
+                RandomHorizontalFlip(p=hflip_prob),
+                ToTensor(),
+            ])
+        else:
+            raise ValueError(f'Unknown data augmentation policy "{data_augmentation}"')
+
+    def __call__(self, img, target):
+        return self.transforms(img, target)
+
+
+class DetectionPresetEval:
+    def __init__(self):
+        self.transforms = ToTensor()
+
+    def __call__(self, img, target):
+        return self.transforms(img, target)
 
 def _flip_coco_person_keypoints(kps, width):
     flip_inds = [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
