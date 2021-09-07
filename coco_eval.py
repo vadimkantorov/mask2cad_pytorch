@@ -9,7 +9,6 @@ import pycocotools.mask as mask_util
 
 import utils
 
-
 class CocoEvaluator(object):
     def __init__(self, coco_gt, iou_types):
         assert isinstance(iou_types, (list, tuple))

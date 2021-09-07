@@ -33,8 +33,8 @@ import transforms
 import utils
 import quat
 
-from pix3d_eval import Pix3dEvaluator
-from coco_eval import CocoEvaluator
+import pix3d_eval
+import coco_eval 
 
 from coco_utils import get_coco_api_from_dataset
 
@@ -120,7 +120,6 @@ def evaluate(model, data_loader, evaluator_pix3d, device):
         model_time = time.time()
         outputs = model(images)
 
-    
         outputs = [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
         model_time = time.time() - model_time
 
@@ -131,7 +130,6 @@ def evaluate(model, data_loader, evaluator_pix3d, device):
         metric_logger.update(model_time=model_time, evaluator_time=evaluator_time)
         
         image_id = extra['image']
-        pred_boxes = torch.tensor(extra['bbox'])[None]
         scores = torch.ones(1)
         pred_classes = torch.tensor([extra['category_idx']])[None]
         pred_masks = extra['mask']
@@ -140,7 +138,7 @@ def evaluate(model, data_loader, evaluator_pix3d, device):
         pred_meshes = [(gt_mesh[0], gt_mesh[1].verts_idx)] 
         pred_dz = torch.tensor([0.3])[None]
         
-        val_evaluator.append(image_id, scores = scores, pred_boxes = pred_boxes, pred_classes = pred_classes, pred_masks = pred_masks, pred_meshes = pred_meshes, pred_dz = pred_dz)
+        val_evaluator.update({image_id : dict(instances = dict(scores = scores, pred_boxes = pred_boxes, pred_classes = pred_classes, pred_masks = pred_masks, pred_meshes = pred_meshes, pred_dz = pred_dz)) })
         #detections = model(img, bbox = bbox, category_idx = category_idx, shape_retrieval = shape_retrieval)
 
     # gather the stats from all processes
@@ -182,8 +180,8 @@ def main(args):
     
     train_sampler = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
     
-    evaluator_coco = CocoEvaluator(get_coco_api_from_dataset(data_loader.dataset), ['bbox', 'segm'])
-    evaluator_pix3d = metrics.Pix3DEvaluator(val_dataset)
+    evaluator_coco = coco_eval.CocoEvaluator(val_dataset.as_coco_dataset(), ['bbox', 'segm'])
+    evaluator_pix3d = pix3d_eval.Pix3DEvaluator(val_dataset)
     
    if args.distributed: 
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)

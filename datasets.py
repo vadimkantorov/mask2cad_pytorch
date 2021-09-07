@@ -5,6 +5,10 @@ import torch
 import torch.utils.data
 import torch.nn.functional as F
 import torchvision
+    
+import pycocotools.coco
+import pycocotools.mask
+    
 
 class RenderedViewsSequentialSampler(torch.utils.data.Sampler):
     def __init__(self, num_examples, num_rendered_views):
@@ -148,6 +152,38 @@ class Pix3d(torchvision.datasets.VisionDataset):
 
     def __len__(self):
         return len(self.metadata)
+
+    def as_coco_dataset(self):
+        # annotation IDs need to start at 1, not 0, see https://github.com/pytorch/vision/issues/1530
+        coco_dataset_dict = dict(
+            images = [dict(id = m['img'], height = m['img_size'][1], width = m['img_size'][0]) for m in self.metadata], 
+            
+            categories = [dict(id = 1 + category_idx, name = category) for category_idx, category in enumerate(self.categories)], 
+            
+            annotations = [dict(id = 1 + image_idx, image_id = m['img'], bbox = [m['bbox'][0], m['bbox'][1], m['bbox'][2] - m['bbox'][0], m['bbox'][3] - m['bbox'][1]], iscrowd = 0, area = (m['bbox'][2] - m['bbox'][0]) * (m['bbox'][3] - m['bbox'][1]), category_id = 1 + self.category_idx[m['category']], segmentation = pycocotools.mask.encode( torchvision.io.read_image(os.path.join(self.root, m['mask']))[0].eq(255).t().contiguous().t().numpy() )   ) for image_idx, m in enumerate(self.metadata)]
+        )
+        
+        coco_dataset = pycocotools.coco.COCO()
+        coco_dataset.dataset = coco_dataset_dict
+        coco_dataset.createIndex()
+        return coco_dataset
+    
+    def getCatIds(self):
+        return list(range(len(self.categories)))
+    
+    def loadCats(self, ids):
+        return [dict(name = self.categories[i]) for i in ids]
+    
+    def loadImgs(self, ids):
+        return [self.image_idx[i] for i in ids]
+        
+    def getAnnIds(self, imgIds):
+        return imgIds
+    
+    def loadAnns(self, ids):
+        return [dict(image_id = i, segmentation = m['mask'], rot_mat = m['rot_mat'], trans_mat = m['trans_mat'], model = m['model'], category_id = self.dataset.category_idx[m['category']], bbox = m['bbox'][:2] + [m['bbox'][2] - m['bbox'][0] + 1, m['bbox'][3] - m['bbox'][1] + 1], K = [m['focal_length'] * m['img_size'][0] / 32, m['img_size'][0] / 2, m['img_size'][1] / 2]) for i in ids for m in [self.image_idx[i]['m']]]
+    
+
 
 def collate_fn(batch):
     assert batch
