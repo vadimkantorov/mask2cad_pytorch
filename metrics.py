@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 import pytorch3d.io, pytorch3d.structures, pytorch3d.utils, pytorch3d.ops 
 
-class Pix3DEvaluator(list):
+class Pix3DEvaluator(dict):
     def __init__(self, dataset):
         self.dataset = dataset
         self.mesh_cache = {model_path : (mesh[0], mesh[1].verts_idx) for model_path in dataset.shape_idx for mesh in [pytorch3d.io.load_obj(os.path.join(dataset.root, model_path), load_textures = False)]}
@@ -31,14 +31,13 @@ class Pix3DEvaluator(list):
     def loadAnns(self, ids):
         return [dict(image_id = i, segmentation = m['mask'], rot_mat = m['rot_mat'], trans_mat = m['trans_mat'], model = m['model'], category_id = self.dataset.category_idx[m['category']], bbox = m['bbox'][:2] + [m['bbox'][2] - m['bbox'][0] + 1, m['bbox'][3] - m['bbox'][1] + 1], K = [m['focal_length'] * m['img_size'][0] / 32, m['img_size'][0] / 2, m['img_size'][1] / 2]) for i in ids for m in [self.dataset.image_idx[i]['m']]]
 
-    def append(self, image_id, *, scores, pred_boxes, pred_classes, pred_masks, pred_meshes, pred_dz):
-        pred_masks_rle = [dict(rle, counts = rle['counts'].decode('utf-8')) for mask in pred_masks for rle in [pycocotools.mask.encode(np.array(mask[:, :, None], order='F', dtype='uint8'))[0]]]
-        
-        super().append(dict(image_id = image_id, instances = dict(scores = scores, pred_boxes = pred_boxes, pred_classes = pred_classes, pred_masks_rle = pred_masks_rle, pred_meshes = pred_meshes, pred_dz = pred_dz)))
+    def update(self, predictions):
+        predictions = { image_id : dict(pred, pred_masks_rle = [dict(rle, counts = rle['counts'].decode('utf-8')) for mask in pred_masks for rle in [pycocotools.mask.encode(np.array(mask[:, :, None], order='F', dtype='uint8'))[0]]]) for image_id, pred in predictions.items() for pred_masks in [pred.pop('pred_masks')] }
+        super().update(predictions)
     
     def __call__(self, iou_thresh = 0.5):
-        pix3d_metrics = evaluate_for_pix3d(self, npos = self.dataset.num_by_category, thing_dataset_id_to_contiguous_id = {k : k for k in range(len(self.dataset.categories))}, cocoapi = self, image_root = self.dataset.root, mesh_models = self.mesh_cache, iou_thresh = iou_thresh)
-        print("Box AP %.5f" %  (pix3d_metrics["box_ap@%.1f"  % iou_thresh]))
+        pix3d_metrics = evaluate_for_pix3d([dict(image_id = image_id, instances = pred) for image_id, pred in self.items()], npos = self.dataset.num_by_category, thing_dataset_id_to_contiguous_id = {k : k for k in range(len(self.dataset.categories))}, cocoapi = self, image_root = self.dataset.root, mesh_models = self.mesh_cache, iou_thresh = iou_thresh)
+        print("Box  AP %.5f" % (pix3d_metrics["box_ap@%.1f"  % iou_thresh]))
         print("Mask AP %.5f" % (pix3d_metrics["mask_ap@%.1f" % iou_thresh]))
         print("Mesh AP %.5f" % (pix3d_metrics["mesh_ap@%.1f" % iou_thresh]))
         return pix3d_metrics

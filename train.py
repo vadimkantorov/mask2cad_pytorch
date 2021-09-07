@@ -60,12 +60,18 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
 
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
         images = list(image.to(device) for image in images)
-        breakpoint()
         targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
 
         loss_dict = model(images, targets)
 
         losses = sum(loss for loss in loss_dict.values())
+        
+        object_location = extra['object_location'].repeat(1, args.num_sampled_boxes, 1)
+        object_rotation_quat = quat.from_matrix(extra['object_rotation']).repeat(1, args.num_sampled_boxes, 1)
+        res = model(img, 
+            rendered = views, 
+            category_idx = category_idx, shape_idx = shape_idx, bbox = bbox, object_location = object_location, object_rotation_quat = object_rotation_quat
+        )
 
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)
@@ -101,8 +107,13 @@ def evaluate(model, data_loader, device):
     header = 'Test:'
 
     coco = get_coco_api_from_dataset(data_loader.dataset)
-    iou_types = ['bbox', 'segm']
-    coco_evaluator = CocoEvaluator(coco, iou_types)
+    coco_evaluator = CocoEvaluator(coco, ['bbox', 'segm'])
+    pix3d_evaluator = metrics.Pix3DEvaluator(val_dataset)
+    
+    val_rendered_view_sampler = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_rendered_view_dataset)
+    val_rendered_view_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, sampler = val_rendered_view_sampler, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
+    val_data_loader = torch.utils.data.DataLoader(val_dataset, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn, shuffle = False)
+    shape_retrieval = models.ShapeRetrieval(val_rendered_view_data_loader, model.rendered_view_encoder)
 
     for images, targets in metric_logger.log_every(data_loader, 100, header):
         images = list(img.to(device) for img in images)
@@ -120,6 +131,19 @@ def evaluate(model, data_loader, device):
         coco_evaluator.update(res)
         evaluator_time = time.time() - evaluator_time
         metric_logger.update(model_time=model_time, evaluator_time=evaluator_time)
+        
+        image_id = extra['image']
+        pred_boxes = torch.tensor(extra['bbox'])[None]
+        scores = torch.ones(1)
+        pred_classes = torch.tensor([extra['category_idx']])[None]
+        pred_masks = extra['mask']
+        
+        gt_mesh = pytorch3d.io.load_obj(os.path.join(val_dataset.root, extra['shape']), load_textures = False)
+        pred_meshes = [(gt_mesh[0], gt_mesh[1].verts_idx)] 
+        pred_dz = torch.tensor([0.3])[None]
+        
+        val_evaluator.append(image_id, scores = scores, pred_boxes = pred_boxes, pred_classes = pred_classes, pred_masks = pred_masks, pred_meshes = pred_meshes, pred_dz = pred_dz)
+        #detections = model(img, bbox = bbox, category_idx = category_idx, shape_retrieval = shape_retrieval)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -155,7 +179,19 @@ def main(args):
     train_dataset = datasets.Pix3D(args.dataset_root, split_path = args.train_metadata_path)
     val_dataset = datasets.Pix3D(args.dataset_root, split_path = args.val_metadata_path)
     
+    val_rendered_view_dataset = datasets.Pix3D(args.dataset_root, args.train_metadata_path, read_image = False)
+    val_dataset = datasets.Pix3D(args.dataset_root, args.val_metadata_path, read_image = False, read_mask = True, target_image_size = None)
+    val_evaluator.clear()
+    train_sampler.set_epoch(0)
+    
     num_classes = len(train_dataset.categories)
+    
+    train_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset)
+    val_rendered_view_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_rendered_view_dataset)
+    train_sampler = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
+    train_data_loader = torch.utils.data.DataLoader(train_dataset, sampler = train_sampler, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
+    model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
+    model.train()
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -289,80 +325,3 @@ if __name__ == '__main__':
     
     print(args)
     main(args)
-
-
-
-
-
-
-
-
-def main(args):
-    train_dataset = datasets.Pix3D(args.dataset_root, args.train_metadata_path, max_image_size = None)
-    val_rendered_view_dataset = datasets.Pix3D(args.dataset_root, args.train_metadata_path, read_image = False)
-    
-    val_dataset = datasets.Pix3D(args.dataset_root, args.val_metadata_path, read_image = False, read_mask = True, target_image_size = None)
-    val_evaluator = metrics.Pix3DEvaluator(val_dataset)
-    
-    val_evaluator.clear()
-    for img, extra in val_dataset:
-        image_id = extra['image']
-        pred_boxes = torch.tensor(extra['bbox'])[None]
-        scores = torch.ones(1)
-        pred_classes = torch.tensor([extra['category_idx']])[None]
-        pred_masks = extra['mask']
-        
-        gt_mesh = pytorch3d.io.load_obj(os.path.join(val_dataset.root, extra['shape']), load_textures = False)
-        pred_meshes = [(gt_mesh[0], gt_mesh[1].verts_idx)] 
-        pred_dz = torch.tensor([0.3])[None]
-        
-        val_evaluator.append(image_id, scores = scores, pred_boxes = pred_boxes, pred_classes = pred_classes, pred_masks = pred_masks, pred_meshes = pred_meshes, pred_dz = pred_dz)
-    
-    results = val_evaluator()
-    print(results)
-    return
-    
-
-    train_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset)
-    val_rendered_view_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_rendered_view_dataset)
-
-    train_sampler = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
-
-    train_data_loader = torch.utils.data.DataLoader(train_dataset, sampler = train_sampler, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
-
-    model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
-    model.train()
-    
-    evaluate(model, val_dataset = val_dataset, val_rendered_view_dataset = val_rendered_view_dataset)
-
-    train_sampler.set_epoch(0)
-    for batch_idx, (img, extra, views) in enumerate(train_data_loader):
-        print(batch_idx)
-
-        bbox = extra['bbox'].repeat(1, args.num_sampled_boxes, 1)
-        category_idx = extra['category_idx'].repeat(1, args.num_sampled_boxes)
-        shape_idx = extra['shape_idx'].repeat(1, args.num_sampled_boxes)
-        object_location = extra['object_location'].repeat(1, args.num_sampled_boxes, 1)
-        object_rotation_quat = quat.from_matrix(extra['object_rotation']).repeat(1, args.num_sampled_boxes, 1)
-
-        res = model(img, 
-            rendered = views, 
-            category_idx = category_idx, shape_idx = shape_idx, bbox = bbox, object_location = object_location, object_rotation_quat = object_rotation_quat
-            )
-        break
-
-def evaluate(model, *, val_dataset, val_rendered_view_dataset):
-    val_rendered_view_sampler = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_rendered_view_dataset)
-    val_rendered_view_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, sampler = val_rendered_view_sampler, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
-    
-    val_data_loader = torch.utils.data.DataLoader(val_dataset, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn, shuffle = False)
-    
-    shape_retrieval = models.ShapeRetrieval(val_rendered_view_data_loader, model.rendered_view_encoder)
-
-    model.eval()
-    for batch_idx, (img, extra) in enumerate(val_data_loader):
-        print(batch_idx)
-        
-        bbox = extra['bbox'].unsqueeze(-2)
-        category_idx = extra['category_idx'].unsqueeze(-1)
-        detections = model(img, bbox = bbox, category_idx = category_idx, shape_retrieval = shape_retrieval)
