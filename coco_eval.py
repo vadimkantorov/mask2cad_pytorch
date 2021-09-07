@@ -1,6 +1,3 @@
-import json
-import tempfile
-
 import numpy as np
 import copy
 import time
@@ -9,8 +6,6 @@ import torch
 from pycocotools.cocoeval import COCOeval
 from pycocotools.coco import COCO
 import pycocotools.mask as mask_util
-
-from collections import defaultdict
 
 import utils
 

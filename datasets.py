@@ -62,7 +62,7 @@ class RenderedViews(torchvision.datasets.VisionDataset):
     def __len__(self):
         return len(self.dataset)
 
-class Pix3D(torchvision.datasets.VisionDataset):
+class Pix3d(torchvision.datasets.VisionDataset):
     categories           = ['bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
     categories_coco_inds = [65   , -1        , 63      , -1   , -1    ,  63   , 67     , -1    ,  -1       ]
 

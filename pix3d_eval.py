@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 import pytorch3d.io, pytorch3d.structures, pytorch3d.utils, pytorch3d.ops 
 
-class Pix3DEvaluator(dict):
+class Pix3dEvaluator(dict):
     def __init__(self, dataset):
         self.dataset = dataset
         self.mesh_cache = {model_path : (mesh[0], mesh[1].verts_idx) for model_path in dataset.shape_idx for mesh in [pytorch3d.io.load_obj(os.path.join(dataset.root, model_path), load_textures = False)]}
