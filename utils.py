@@ -204,15 +204,6 @@ class MetricLogger(object):
 
 
 
-def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
-
-    def f(x):
-        if x >= warmup_iters:
-            return 1
-        alpha = float(x) / warmup_iters
-        return warmup_factor * (1 - alpha) + alpha
-
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, f)
 
 
 
@@ -255,7 +246,7 @@ def is_main_process():
     return get_rank() == 0
 
 
-def save_on_master(*args, **kwargs):
+def save_on_main(*args, **kwargs):
     if is_main_process():
         torch.save(*args, **kwargs)
 

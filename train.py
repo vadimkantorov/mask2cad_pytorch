@@ -11,12 +11,8 @@ If you use different number of gpus, the learning rate should be changed to 0.02
 
 On top of that, for training Faster/Mask R-CNN, the default hyperparameters are
     --epochs 26 --lr-steps 16 22 --aspect-ratio-group-factor 3
-
-Also, if you train Keypoint R-CNN, the default hyperparameters are
-    --epochs 46 --lr-steps 36 43 --aspect-ratio-group-factor 3
-Because the number of images is smaller in the person keypoint subset of COCO,
-the number of epochs should be adapted so that we have the same number of iterations.
 '''
+
 import argparse
 import datetime
 import os
@@ -44,6 +40,16 @@ import metrics
 
 from coco_utils import get_coco, get_coco_kp, get_coco_api_from_dataset
 from coco_eval import CocoEvaluator
+
+def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
+
+    def f(x):
+        if x >= warmup_iters:
+            return 1
+        alpha = float(x) / warmup_iters
+        return warmup_factor * (1 - alpha) + alpha
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, f)
 
 def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq):
     model.train()
@@ -101,7 +107,6 @@ def evaluate(model, data_loader, device):
     n_threads = torch.get_num_threads()
     # FIXME remove this and make paste_masks_in_image run on the GPU
     torch.set_num_threads(1)
-    cpu_device = torch.device('cpu')
     model.eval()
     metric_logger = utils.MetricLogger(delimiter='  ')
     header = 'Test:'
@@ -123,7 +128,7 @@ def evaluate(model, data_loader, device):
         model_time = time.time()
         outputs = model(images)
 
-        outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
+        outputs = [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
         model_time = time.time() - model_time
 
         res = {target['image_id'].item(): output for target, output in zip(targets, outputs)}
@@ -169,6 +174,9 @@ def build_model(num_classes, hidden_layer = 256):
     model = torchvision.models.detection.maskrcnn_resnet50_fpn(pretrained=True)
     model.roi_heads.box_predictor = FastRCNNPredictor(model.roi_heads.box_predictor.cls_score.in_features, num_classes)
     model.roi_heads.mask_predictor = MaskRCNNPredictor(model.roi_heads.mask_predictor.conv5_mask.in_channels, hidden_layer, num_classes)
+    
+    model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
+    
     return model
 
 def main(args):
@@ -190,9 +198,7 @@ def main(args):
     val_rendered_view_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_rendered_view_dataset)
     train_sampler = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
     train_data_loader = torch.utils.data.DataLoader(train_dataset, sampler = train_sampler, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
-    model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
-    model.train()
-
+    
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
@@ -210,14 +216,7 @@ def main(args):
     train_data_loader  =  torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = collate_fn)
     val_data_loader  =  torch.utils.data.DataLoader(val_dataset, batch_size = 1, sampler = val_sampler, num_workers = args.num_workers, collate_fn = collate_fn)
 
-    kwargs = {
-        'trainable_backbone_layers': args.trainable_backbone_layers
-    }
-    if 'rcnn' in args.model:
-        if args.rpn_score_thresh is not None:
-            kwargs['rpn_score_thresh'] = args.rpn_score_thresh
-    
-    model = build_model(num_classes = num_classes, pretrained = args.pretrained, **kwargs)
+    model = build_model(num_classes = num_classes, pretrained = args.pretrained, trainable_backbone_layers = args.trainable_backbone_layers, rpn_score_thresh = args.rpn_score_thresh if args.rpn_score_thresh is not None else None)
 
     model.to(args.device)
     if args.distributed and args.convert_sync_batchnorm:
@@ -262,14 +261,9 @@ def main(args):
                 args = args,
                 epoch = epoch
             )
-            utils.save_on_master(
-                checkpoint,
-                os.path.join(args.output_dir, 'model_{}.pt'.format(epoch)))
-            utils.save_on_master(
-                checkpoint,
-                os.path.join(args.output_dir, 'checkpoint.pt'))
+            utils.save_on_main(checkpoint, os.path.join(args.output_dir, 'model_{}.pt'.format(epoch)))
+            utils.save_on_main(checkpoint, os.path.join(args.output_dir, 'checkpoint.pt'))
 
-        # evaluate after every epoch
         evaluate(model, val_data_loader, device=args.device)
 
     total_time = time.time() - start_time
