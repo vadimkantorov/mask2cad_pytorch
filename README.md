@@ -15,6 +15,8 @@ $blender -noaudio --background --python render_pix3d.py
 ### Training
 ```shell
 # finetune Mask-RCNN on Pix3D
+
+# train Mask2CAD
 ```
 
 ### Evaluation

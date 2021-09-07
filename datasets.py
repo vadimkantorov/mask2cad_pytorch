@@ -116,7 +116,7 @@ class Pix3D(torchvision.datasets.VisionDataset):
         bbox = torch.tensor(bbox).unsqueeze(0)
         area = (bbox[..., 2] - bbox[..., 0]) * (bbox[..., 3] - bbox[..., 1])
         iscrowd = torch.zeros(len(bbox), dtype = torch.uint8)
-        labels = torch.tensor(self.category_idx[m['category']]).unsqueeze(0)
+        labels = 1 + torch.tensor(self.category_idx[m['category']]).unsqueeze(0)
         masks = (mask == 255).unsqueeze(0)
         object_location = torch.as_tensor(m['trans_mat'], dtype = torch.float64).unsqueeze(0)
         object_rotation = torch.as_tensor(m['rot_mat'], dtype = torch.float64).unsqueeze(0)
