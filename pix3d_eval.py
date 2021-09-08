@@ -32,7 +32,7 @@ class Pix3dEvaluator(dict):
         return [dict(image_id = i, segmentation = m['mask'], rot_mat = m['rot_mat'], trans_mat = m['trans_mat'], model = m['model'], category_id = self.dataset.category_idx[m['category']], bbox = m['bbox'][:2] + [m['bbox'][2] - m['bbox'][0] + 1, m['bbox'][3] - m['bbox'][1] + 1], K = [m['focal_length'] * m['img_size'][0] / 32, m['img_size'][0] / 2, m['img_size'][1] / 2]) for i in ids for m in [self.dataset.image_idx[i]['m']]]
 
     def update(self, predictions):
-        predictions = { image_id : dict(instances = dict(pred['instances'], pred_masks_rle = [dict(rle, counts = rle['counts'].decode('utf-8')) for mask in pred_masks for rle in [pycocotools.mask.encode(np.array(mask[:, :, None], order='F', dtype='uint8'))[0]]]) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
+        predictions = { image_id : dict(instances = dict(pred['instances'], pred_masks_rle = [dict(rle, counts = rle['counts'].decode('utf-8')) for mask in pred_masks for rle in [pycocotools.mask.encode(np.array(mask[:, :, None], order='F', dtype='uint8'))[0]]] )) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
         super().update(predictions)
     
     def __call__(self, iou_thresh = 0.5):

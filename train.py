@@ -42,19 +42,18 @@ def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
 def mix_losses(loss_dict, loss_weights):
     return sum(loss_dict[k] * loss_weights[k] for k in loss_dict)
 
-def train_one_epoch(model, optimizer, sampler, data_loader, device, epoch, print_freq):
+def train_one_epoch(model, optimizer, sampler, data_loader, device, epoch, print_freq, args):
     model.train()
     metric_logger = utils.MetricLogger(delimiter='  ')
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
 
     lr_scheduler = warmup_lr_scheduler(optimizer, min(1000, len(data_loader) - 1), warmup_factor = 1. / 1000) if epoch == 0 else None
 
-    for images, targets in metric_logger.log_every(data_loader, print_freq, header):
+    for images, targets in metric_logger.log_every(data_loader, print_freq, header = 'Epoch: [{}]'.format(epoch)):
         images = [image.to(device) for image in images]
         targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
 
-        loss_dict = model(images, targets)
+        loss_dict = model(images, targets, mode = args.mode)
 
         loss_dict_reduced = utils.reduce_dict(loss_dict)
         if not torch.isfinite(sum(loss_dict.values())):
@@ -82,7 +81,6 @@ def train_one_epoch(model, optimizer, sampler, data_loader, device, epoch, print
 def evaluate(model, data_loader, evaluator_coco, evaluator_pix3d, device):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter='  ')
-    header = 'Test:'
 
     val_rendered_view_sampler = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_rendered_view_dataset)
     val_rendered_view_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, sampler = val_rendered_view_sampler, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
@@ -91,7 +89,7 @@ def evaluate(model, data_loader, evaluator_coco, evaluator_pix3d, device):
     
     evaluator_pix3d.clear()
 
-    for images, targets in metric_logger.log_every(data_loader, 100, header):
+    for images, targets in metric_logger.log_every(data_loader, 100, header = 'Test:'):
         images = list(img.to(device) for img in images)
 
         if torch.cuda.is_available():
@@ -139,30 +137,24 @@ def build_transform(train, data_augmentation):
         transforms.append(T.RandomHorizontalFlip(0.5))
     return T.Compose(transforms)
 
-def build_model(num_classes, hidden_layer = 256, trainable_backbone_layers = 0, rpn_score_thresh = float('inf')):
-    model = models.Mask2CAD(object_rotation_quat = train_dataset.clustered_rotations)
-    return model
-
 def main(args):
     os.makedirs(args.output_path, exist_ok = True)
     utils.init_distributed_mode(args)
 
-    train_dataset = datasets.Pix3D(args.dataset_root, split_path = args.train_metadata_path)
+    train_dataset = datasets.Pix3d(args.dataset_root, split_path = args.train_metadata_path)
+    aspect_ratios,  num_categories = train_dataset.aspect_ratios, len(train_dataset.categories)
     train_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset)
-    
-    val_dataset = datasets.Pix3D(args.dataset_root, split_path = args.val_metadata_path)
-    
-    val_rendered_view_dataset = datasets.Pix3D(args.dataset_root, args.train_metadata_path, read_image = False)
+    object_rotation_quat = train_dataset.clustered_rotations
+    val_dataset = datasets.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
+    val_rendered_view_dataset = datasets.Pix3d(args.dataset_root, args.train_metadata_path, read_image = False)
     val_rendered_view_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_rendered_view_dataset)
-    
-    num_classes = len(train_dataset.categories)
     
     train_sampler = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
     
     evaluator_coco = coco_eval.CocoEvaluator(val_dataset.as_coco_dataset(), ['bbox', 'segm'])
-    evaluator_pix3d = pix3d_eval.Pix3DEvaluator(val_dataset)
+    evaluator_pix3d = pix3d_eval.Pix3dEvaluator(val_dataset)
     
-   if args.distributed: 
+    if args.distributed: 
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
     else:
@@ -170,7 +162,7 @@ def main(args):
         val_sampler = torch.utils.data.SequentialSampler(val_dataset)
 
     if args.aspect_ratio_group_factor >= 0:
-        train_batch_sampler = samplers.GroupedBatchSampler(train_sampler, samplers.create_aspect_ratio_groups(train_dataset.aspect_ratios.tolist(), k = args.aspect_ratio_group_factor), args.train_batch_size)
+        train_batch_sampler = samplers.GroupedBatchSampler(train_sampler, samplers.create_aspect_ratio_groups(aspect_ratios.tolist(), k = args.aspect_ratio_group_factor), args.train_batch_size)
     else:
         train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
     
@@ -179,8 +171,10 @@ def main(args):
     val_data_loader  =  torch.utils.data.DataLoader(val_dataset, batch_size = 1, sampler = val_sampler, num_workers = args.num_workers, collate_fn = collate_fn)
     train_data_loader = torch.utils.data.DataLoader(train_dataset, sampler = train_sampler, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
 
+    #pretrained = args.pretrained, trainable_backbone_layers = args.trainable_backbone_layers, rpn_score_thresh = args.rpn_score_thresh if args.rpn_score_thresh is not None else None
+    breakpoint()
+    model = models.Mask2CAD(num_categories = num_categories, object_rotation_quat = object_rotation_quat)
 
-    model = build_model(num_classes = num_classes, pretrained = args.pretrained, trainable_backbone_layers = args.trainable_backbone_layers, rpn_score_thresh = args.rpn_score_thresh if args.rpn_score_thresh is not None else None)
     model.to(args.device)
     if args.distributed and args.convert_sync_batchnorm:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -212,7 +206,7 @@ def main(args):
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         train_sampler.set_epoch(epoch)
-        train_one_epoch(model, optimizer, train_sampler, train_data_loader, args.device, epoch, args.print_freq)
+        train_one_epoch(model, optimizer, train_sampler, train_data_loader, args.device, epoch, args.print_freq, args)
         lr_scheduler.step()
 
         if args.output_path:
@@ -239,7 +233,6 @@ if __name__ == '__main__':
     parser.add_argument('--dataset-root', default = 'data/common/pix3d')
     parser.add_argument('--train-metadata-path', default = 'data/common/pix3d_splits/pix3d_s1_train.json')
     parser.add_argument('--val-metadata-path', default = 'data/common/pix3d_splits/pix3d_s1_test.json')
-    parser.add_argument('--dataset', default='Pix3D')
     
     parser.add_argument('--model', default='maskrcnn_resnet50_fpn')
     parser.add_argument('--device', default='cpu', help='device')
@@ -269,8 +262,8 @@ if __name__ == '__main__':
     parser.add_argument('--evaluate-only', action='store_true')
     parser.add_argument('--pretrained', action='store_true')
     
-    parser.add_argument('--loss', default = 'MaskRCNN', choices = ['MaskRCNN', 'Mask2CAD'] )
-    parser.add_argument('--loss-weights', default = dict(shape_embedding = 0.5, pose_classification = 0.25, pose_regression = 5.0, center_regression = 5.0), parser.add_argument('--loss-weights', action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update(dict([v.split('=')])))))
+    parser.add_argument('--mode', default = 'MaskRCNN', choices = ['MaskRCNN', 'Mask2CAD'] )
+    parser.add_argument('--loss-weights', default = dict(shape_embedding = 0.5, pose_classification = 0.25, pose_regression = 5.0, center_regression = 5.0), action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update(dict([v.split('=')])))))
     
     parser.add_argument('--dataset-rendered-views-root', default = 'data/pix3d_renders')
     parser.add_argument('--dataset-clustered-rotations', default = 'pix3d_clustered_viewpoints.json')

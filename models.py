@@ -18,7 +18,7 @@ class ShapeRetrieval(nn.Module):
         return self.category_idx[idx], self.shape_idx[idx]
 
 class Mask2CAD(nn.Module):
-    def __init__(self, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, shape_retrieval = None):
+    def __init__(self, *, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None):
         super().__init__()
         # TODO: buffer?
         self.object_rotation_quat = object_rotation_quat
@@ -50,13 +50,15 @@ class Mask2CAD(nn.Module):
         self.pose_refinement_branch[-1].bias.zero_()
         self.pose_refinement_branch[-1].bias[3::4] = quat_fill # xyzw
 
-    def forward(self, img : 'B3HW', *,
+    def forward(self, img : 'B3HW', targets,
                 P = 4, N = 8,
                 shape_retrieval = None
         ):
+
+        breakpoint()
         
-        rendered : 'B(QV)3HW' = None,
-        category_idx : 'BQ' = None, shape_idx : 'BQ' = None, bbox : 'BQ4' = None, object_location : 'BQ3' = None, object_rotation_quat : 'BQ4' = None,      
+        #rendered : 'B(QV)3HW' = None
+        #category_idx : 'BQ' = None, shape_idx : 'BQ' = None, bbox : 'BQ4' = None, object_location : 'BQ3' = None, object_rotation_quat : 'BQ4' = None,      
         bbox, category_idx, shape_idx, object_location, object_rotation_quat = map(targets.get, ['boxes', 'labels', 'shape_idx', 'object_location', 'object_rotation_quat'])
         
         if bbox is not None and category_idx is not None:
