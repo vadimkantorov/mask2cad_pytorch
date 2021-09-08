@@ -51,11 +51,13 @@ class Mask2CAD(nn.Module):
         self.pose_refinement_branch[-1].bias[3::4] = quat_fill # xyzw
 
     def forward(self, img : 'B3HW', *,
-                rendered : 'B(QV)3HW' = None,
-                category_idx : 'BQ' = None, shape_idx : 'BQ' = None, bbox : 'BQ4' = None, object_location : 'BQ3' = None, object_rotation_quat : 'BQ4' = None,      
-                loss_weights = dict(shape_embedding = 0.5, pose_classification = 0.25, pose_regression = 5.0), P = 4, N = 8,
+                P = 4, N = 8,
                 shape_retrieval = None
         ):
+        
+        rendered : 'B(QV)3HW' = None,
+        category_idx : 'BQ' = None, shape_idx : 'BQ' = None, bbox : 'BQ4' = None, object_location : 'BQ3' = None, object_rotation_quat : 'BQ4' = None,      
+        bbox, category_idx, shape_idx, object_location, object_rotation_quat = map(targets.get, ['boxes', 'labels', 'shape_idx', 'object_location', 'object_rotation_quat'])
         
         if bbox is not None and category_idx is not None:
             detections = [dict(boxes = b, labels = c) for b, c in zip(bbox, category_idx)]
@@ -88,9 +90,7 @@ class Mask2CAD(nn.Module):
             shape_embedding_loss = self.shape_embedding_loss(shape_embedding.unflatten(0, (B, Q)), rendered_view_features, category_idx = category_idx, shape_idx = shape_idx, P = P, N = N)
             pose_classification_loss, pose_regression_loss, center_regression_loss = self.pose_estimation_loss(self.index_left(object_rotation_bins.unflatten(0, (B, Q)), category_idx), self.index_left(object_rotation_delta.unflatten(0, (B, Q)), category_idx), self.index_left(center_delta.unflatten(0, (B, Q)), category_idx), target_object_rotation_bins, target_object_rotation_delta, target_center_delta)
             
-            loss = loss_weights['shape_embedding'] * shape_embedding_loss + loss_weights['pose_classification'] * pose_classification_loss + loss_weights['pose_regression'] * pose_regression_loss + loss_weights['pose_regression'] * center_regression_loss
-            
-            return loss
+            return dict(shape_embedding = shape_embedding_loss, pose_classification = pose_classification_loss, pose_regression = pose_regression_loss, center_regression = center_regression_loss)
 
         else:
             category_idx = category_idx.flatten()

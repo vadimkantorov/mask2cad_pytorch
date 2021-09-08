@@ -13,12 +13,12 @@ On top of that, for training Faster/Mask R-CNN, the default hyperparameters are
     --epochs 26 --lr-steps 16 22 --aspect-ratio-group-factor 3
 '''
 
-import argparse
-import datetime
 import os
-import math
 import sys
 import time
+import math
+import argparse
+import datetime
 
 import torch
 import torch.utils.data
@@ -36,17 +36,11 @@ import quat
 import pix3d_eval
 import coco_eval 
 
-from coco_utils import get_coco_api_from_dataset
-
 def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda x: 1 if x >= warmup_iters else warmup_factor * (1 - x / warmup_iters) + x / warmup_iters)
 
-    def f(x):
-        if x >= warmup_iters:
-            return 1
-        alpha = float(x) / warmup_iters
-        return warmup_factor * (1 - alpha) + alpha
-
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, f)
+def mix_losses(loss_dict, loss_weights):
+    return sum(loss_dict[k] * loss_weights[k] for k in loss_dict)
 
 def train_one_epoch(model, optimizer, sampler, data_loader, device, epoch, print_freq):
     model.train()
@@ -54,37 +48,22 @@ def train_one_epoch(model, optimizer, sampler, data_loader, device, epoch, print
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
 
-    lr_scheduler = None
-    if epoch == 0:
-        warmup_factor = 1. / 1000
-        warmup_iters = min(1000, len(data_loader) - 1)
-
-        lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
+    lr_scheduler = warmup_lr_scheduler(optimizer, min(1000, len(data_loader) - 1), warmup_factor = 1. / 1000) if epoch == 0 else None
 
     for images, targets in metric_logger.log_every(data_loader, print_freq, header):
-        images = list(image.to(device) for image in images)
+        images = [image.to(device) for image in images]
         targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
 
         loss_dict = model(images, targets)
 
-        losses = sum(loss for loss in loss_dict.values())
-        
-        object_location = extra['object_location'].repeat(1, args.num_sampled_boxes, 1)
-        object_rotation_quat = quat.from_matrix(extra['object_rotation']).repeat(1, args.num_sampled_boxes, 1)
-        res = model(img, 
-            rendered = views, 
-            category_idx = category_idx, shape_idx = shape_idx, bbox = bbox, object_location = object_location, object_rotation_quat = object_rotation_quat
-        )
-
-        # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)
-        losses_reduced = sum(loss for loss in loss_dict_reduced.values())
-
-        if not torch.isfinite(losses_reduced):
+        if not torch.isfinite(sum(loss_dict.values())):
             loss_value = losses_reduced.item()
             print('Loss is {}, stopping training'.format(loss_value))
             print(loss_dict_reduced)
             sys.exit(1)
+        
+        losses = mix_losses(loss_dict, args.loss_weights)
 
         optimizer.zero_grad()
         losses.backward()
@@ -100,7 +79,7 @@ def train_one_epoch(model, optimizer, sampler, data_loader, device, epoch, print
 
 
 @torch.no_grad()
-def evaluate(model, data_loader, evaluator_pix3d, device):
+def evaluate(model, data_loader, evaluator_coco, evaluator_pix3d, device):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter='  ')
     header = 'Test:'
@@ -227,8 +206,7 @@ def main(args):
         args.start_epoch = checkpoint['epoch'] + 1
 
     if args.evaluate_only:
-        evaluate(model, val_data_loader, evaluator_pix3d, device=args.device)
-        return
+        return evaluate(model, val_data_loader, evaluator_coco, evaluator_pix3d, device=args.device)
 
     print('Start training')
     start_time = time.time()
@@ -248,11 +226,9 @@ def main(args):
             utils.save_on_main(checkpoint, os.path.join(args.output_path, 'model_{}.pt'.format(epoch)))
             utils.save_on_main(checkpoint, os.path.join(args.output_path, 'checkpoint.pt'))
 
-        evaluate(model, val_data_loader, evaluator_pix3d, device=args.device)
+        evaluate(model, val_data_loader, evaluator_coco, evaluator_pix3d, device=args.device)
 
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+    print('Training time', datetime.timedelta(seconds=int(time.time() - start_time)))
 
 
 if __name__ == '__main__':
@@ -293,11 +269,15 @@ if __name__ == '__main__':
     parser.add_argument('--evaluate-only', action='store_true')
     parser.add_argument('--pretrained', action='store_true')
     
+    parser.add_argument('--loss', default = 'MaskRCNN', choices = ['MaskRCNN', 'Mask2CAD'] )
+    parser.add_argument('--loss-weights', default = dict(shape_embedding = 0.5, pose_classification = 0.25, pose_regression = 5.0, center_regression = 5.0), parser.add_argument('--loss-weights', action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update(dict([v.split('=')])))))
+    
     parser.add_argument('--dataset-rendered-views-root', default = 'data/pix3d_renders')
     parser.add_argument('--dataset-clustered-rotations', default = 'pix3d_clustered_viewpoints.json')
     parser.add_argument('--num-rendered-views', type = int, default = 16)
     parser.add_argument('--num-sampled-views', type = int, default = 3)
     parser.add_argument('--num-sampled-boxes', type = int, default = 8)
+    
 
     args = parser.parse_args()
     
