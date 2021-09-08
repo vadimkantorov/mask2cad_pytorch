@@ -52,7 +52,8 @@ class Mask2CAD(nn.Module):
 
     def forward(self, img : 'B3HW', targets,
                 P = 4, N = 8,
-                shape_retrieval = None
+                shape_retrieval = None,
+                mode = None
         ):
 
         breakpoint()
