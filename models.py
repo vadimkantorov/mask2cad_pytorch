@@ -8,9 +8,9 @@ import torchvision
 import quat
 
 class ShapeRetrieval(nn.Module):
-    def __init__(self, rendered_view_batches, rendered_view_encoder):
+    def __init__(self, data_loader, rendered_view_encoder):
         super().__init__()
-        self.shape_embedding, self.category_idx, self.shape_idx = zip(*[(rendered_view_encoder(views.flatten(end_dim = -4)), extra['category_idx'].repeat(1, views.shape[-4]).flatten(), extra['shape_idx'].repeat(1, views.shape[-4]).flatten()  ) for img, extra, views in rendered_view_batches])
+        self.shape_embedding, self.category_idx, self.shape_idx = zip(*[(rendered_view_encoder(views.flatten(end_dim = -4)), extra['category_idx'].repeat(1, views.shape[-4]).flatten(), extra['shape_idx'].repeat(1, views.shape[-4]).flatten()  ) for img, trargets in data_loader])
         self.shape_embedding, self.category_idx, self.shape_idx = F.normalize(torch.cat(self.shape_embedding), dim = -1), torch.cat(self.category_idx), torch.cat(self.shape_idx)
         
     def forward(self, shape_embedding):
@@ -18,7 +18,7 @@ class ShapeRetrieval(nn.Module):
         return self.category_idx[idx], self.shape_idx[idx]
 
 class Mask2CAD(nn.Module):
-    def __init__(self, *, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None):
+    def __init__(self, *, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, **kwargs_backbone):
         super().__init__()
         # TODO: buffer?
         self.object_rotation_quat = object_rotation_quat
@@ -50,26 +50,20 @@ class Mask2CAD(nn.Module):
         self.pose_refinement_branch[-1].bias.zero_()
         self.pose_refinement_branch[-1].bias[3::4] = quat_fill # xyzw
 
-    def forward(self, img : 'B3HW', targets,
-                P = 4, N = 8,
-                shape_retrieval = None,
-                mode = None
-        ):
-
-        breakpoint()
+    def forward(self, img, targets, shape_retrieval = None, mode = None, P = 4, N = 8):
+        if mode == 'MaskRCNN':
+            return self.object_detector(img, targets)
         
-        #rendered : 'B(QV)3HW' = None
-        #category_idx : 'BQ' = None, shape_idx : 'BQ' = None, bbox : 'BQ4' = None, object_location : 'BQ3' = None, object_rotation_quat : 'BQ4' = None,      
         bbox, category_idx, shape_idx, object_location, object_rotation_quat = map(targets.get, ['boxes', 'labels', 'shape_idx', 'object_location', 'object_rotation_quat'])
         
         if bbox is not None and category_idx is not None:
             detections = [dict(boxes = b, labels = c) for b, c in zip(bbox, category_idx)]
-            images = self.object_detector.transform(img)[0]
+            images = self.object_detector.transform(images)[0]
             img_features = self.object_detector.backbone(images.tensors)
             box_features = self.object_detector.roi_heads.box_roi_pool(img_features, bbox.unbind(), images.image_sizes)
 
         else:
-            detections = self.object_detector(img)
+            detections = self.object_detector(images)
             box_features = self.object_detector.roi_heads.box_roi_pool(*self.object_detector.roi_heads.mask_roi_pool.args)
             mask_logits = self.object_detector.roi_heads.mask_predictor.output
             category_idx = torch.cat([d['labels'] for d in detections])

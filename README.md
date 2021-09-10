@@ -15,8 +15,10 @@ $blender -noaudio --background --python render_pix3d.py
 ### Training
 ```shell
 # finetune Mask-RCNN on Pix3D
+python train.py --loss-weights loss_classifier=1 --loss-weights loss_box_reg=1 --loss-weights loss_mask=1 --loss-weights loss_objectness=1 --loss-weights loss_rpn_box_reg=1
 
 # train Mask2CAD
+python train.py --loss-weights shape_embedding=0.5 --loss-weights pose_classification=0.25 --loss-weights pose_regression=5.0 --loss-weights center_regression=5.0
 ```
 
 ### Evaluation

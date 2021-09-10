@@ -47,6 +47,17 @@ class RenderedViewsRandomSampler(torch.utils.data.Sampler):
     def __len__(self):
         return len(self.idx)
 
+class UniqueShapeRenderedViewsSequentialSampler(torch.utils.data.Sampler):
+    def __init__(self, dataset, num_rendered_views):
+        shape2idx = {m['shape_path'] : i for i, m in enumerate(dataset)}
+        self.idx = torch.cat([torch.tensor(shape2idx.values(), dtype = torch.int64).unsqueeze(-1), torch.arange(1, 1 + num_rendered_views, dtype = torch.int64).repeat(len(shape2idx), 1))
+        
+    def __iter__(self):
+        return iter(self.idx.tolist())
+
+    def __len__(self):
+        return len(self.idx)
+
 class RenderedViews(torchvision.datasets.VisionDataset):
     def __init__(self, root, clustered_rotations_path, dataset, ext = '.jpg'):
         super().__init__(root = root)
@@ -56,10 +67,11 @@ class RenderedViews(torchvision.datasets.VisionDataset):
 
     def __getitem__(self, idx):
         img, extra = self.dataset[idx[0]]
-        view_dir = os.path.join(self.root, extra['shape'])
+        view_dir = os.path.join(self.root, extra['shape_path'])
         or_jpg = lambda path, ext = '.png': torchvision.io.read_image(path if os.path.exists(path) else path.replace(ext, '.jpg'))
         no_img = lambda idx: [i for i in idx if i > 0]
-        views = torch.stack([or_jpg(os.path.join(self.root, extra['image']) if k == 0 else os.path.join(view_dir, f'{k:04}' + self.ext)) for k in no_img(idx)])
+        
+        views = torch.stack([or_jpg(os.path.join(self.root, extra['image_id']) if k == 0 else os.path.join(view_dir, f'{k:04}' + self.ext)) for k in no_img(idx[1:])])
 
         return img, extra, views.expand(-1, 3, -1, -1) / 255.0
 
@@ -188,22 +200,37 @@ class Pix3d(torchvision.datasets.VisionDataset):
 def collate_fn(batch):
     assert batch
 
-    img = torch.stack([b[0] for b in batch])
-    extra = dict(
-        masks = torch.stack([b[1]['masks'] for b in batch]), 
-        category = [b[1]['category'] for b in batch], 
-        shape_path = [b[1]['shape_path'] for b in batch], 
+    images = torch.stack([b[0] for b in batch])
+    
+    targets = dict(
         image_id = [b[1]['image_id'] for b in batch], 
+        shape_path = [b[1]['shape_path'] for b in batch], 
         mask_path = [b[1]['mask_path'] for b in batch], 
+        category = [b[1]['category'] for b in batch],
+
+        boxes = torch.stack([b[1]['boxes'] for b in batch]),
+        masks = torch.stack([b[1]['masks'] for b in batch]), 
         shape_idx = torch.stack([b[1]['shape_idx'] for b in batch]), 
         labels = torch.stack([b[1]['labels'] for b in batch]), 
-        boxes = torch.stack([b[1]['boxes'] for b in batch]),
         object_location = torch.stack([b[1]['object_location'] for b in batch]),
-        object_rotation = torch.stack([b[1]['object_rotation'] for b in batch])
+        object_rotation = torch.stack([b[1]['object_rotation'] for b in batch]),
+        views = torch.stack([b[2] for b in batch]) if len(batch[0]) > 2 else None
     )
-    views = (torch.stack([b[2] for b in batch]), ) if len(batch[0]) > 2 else ()
+   
+    return images, targets
 
-    return (img, extra) + views
+def _to_device(batch, device):
+    images = [image.to(device) for image in images]
+    targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
+    return images, targets
+
+def _collate_fn(batch):
+    return tuple(zip(*batch))
+       
+def to_device(images, targets, device):
+    images = images.to(device) 
+    targets = {k: v.to(device) if torch.is_tensor(v) else v for k, v in targets.items()}
+    return images, targets
 
 def worker_init_fn(worker_id, num_threads = 1):
     torch.manual_seed(worker_id)

@@ -42,27 +42,20 @@ def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
 def mix_losses(loss_dict, loss_weights):
     return sum(loss_dict[k] * loss_weights[k] for k in loss_dict)
 
-def train_one_epoch(model, optimizer, sampler, data_loader, device, epoch, print_freq, args):
+def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, args):
     model.train()
     metric_logger = utils.MetricLogger(delimiter='  ')
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
 
     lr_scheduler = warmup_lr_scheduler(optimizer, min(1000, len(data_loader) - 1), warmup_factor = 1. / 1000) if epoch == 0 else None
 
+    batch = next(iter(data_loader))
     for images, targets in metric_logger.log_every(data_loader, print_freq, header = 'Epoch: [{}]'.format(epoch)):
-        images = [image.to(device) for image in images]
-        targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
+        breakpoint()
+        images, targets = datasets.to_device(images, targets, device = args.device)
 
         loss_dict = model(images, targets, mode = args.mode)
-
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-        if not torch.isfinite(sum(loss_dict.values())):
-            loss_value = losses_reduced.item()
-            print('Loss is {}, stopping training'.format(loss_value))
-            print(loss_dict_reduced)
-            sys.exit(1)
-        
-        losses = mix_losses(loss_dict, args.loss_weights)
+        losses = mix_losses(loss_dict, args.loss_weights) if args.mode == 'Mask2CAD' else sum(loss_dict.values())
 
         optimizer.zero_grad()
         losses.backward()
@@ -78,33 +71,28 @@ def train_one_epoch(model, optimizer, sampler, data_loader, device, epoch, print
 
 
 @torch.no_grad()
-def evaluate(model, data_loader, evaluator_coco, evaluator_pix3d, device):
+def evaluate(model, data_loader, evaluator_coco, evaluator_pix3d, shape_retrieval, device):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter='  ')
-
-    val_rendered_view_sampler = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_rendered_view_dataset)
-    val_rendered_view_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, sampler = val_rendered_view_sampler, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
-    val_data_loader = torch.utils.data.DataLoader(val_dataset, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn, shuffle = False)
-    shape_retrieval = models.ShapeRetrieval(val_rendered_view_data_loader, model.rendered_view_encoder)
     
     evaluator_pix3d.clear()
 
     for images, targets in metric_logger.log_every(data_loader, 100, header = 'Test:'):
-        images = list(img.to(device) for img in images)
+        images, targets = datasets.to_device(images, targets, device = args.device)
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        model_time = time.time()
-        outputs = model(images)
-
+        
+        tic = time.time()
+        outputs = model(images, mode = args.device)
         outputs = [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
-        model_time = time.time() - model_time
-
         res = {target['image_id'].item(): output for target, output in zip(targets, outputs)}
-        evaluator_time = time.time()
+        
+        toc_model = time.time() - tic
+        tic = time.time()
         coco_evaluator.update(res)
-        evaluator_time = time.time() - evaluator_time
-        metric_logger.update(model_time=model_time, evaluator_time=evaluator_time)
+        toc_evaluator = time.time() - tic
+        metric_logger.update(model_time = toc_model, evaluator_time = toc_evaluator)
         
         image_id = extra['image']
         scores = torch.ones(1)
@@ -143,36 +131,47 @@ def main(args):
 
     train_dataset = datasets.Pix3d(args.dataset_root, split_path = args.train_metadata_path)
     aspect_ratios,  num_categories = train_dataset.aspect_ratios, len(train_dataset.categories)
-    train_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset)
-    object_rotation_quat = train_dataset.clustered_rotations
-    val_dataset = datasets.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
-    val_rendered_view_dataset = datasets.Pix3d(args.dataset_root, args.train_metadata_path, read_image = False)
-    val_rendered_view_dataset = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_rendered_view_dataset)
+    train_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset)
+    object_rotation_quat = train_dataset_with_views.clustered_rotations
     
-    train_sampler = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
+    val_dataset = datasets.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
+    val_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_dataset)
     
     evaluator_coco = coco_eval.CocoEvaluator(val_dataset.as_coco_dataset(), ['bbox', 'segm'])
-    evaluator_pix3d = pix3d_eval.Pix3dEvaluator(val_dataset)
-    
-    if args.distributed: 
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
-    else:
-        train_sampler = torch.utils.data.RandomSampler(train_dataset)
-        val_sampler = torch.utils.data.SequentialSampler(val_dataset)
+    evaluator_pix3d = None #pix3d_eval.Pix3dEvaluator(val_dataset)
+   
+    if args.mode == 'MaskRCNN':
+        
+        if args.distributed: 
+            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+            val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
+        else:
+            train_sampler = torch.utils.data.RandomSampler(train_dataset)
+            val_sampler = torch.utils.data.SequentialSampler(val_dataset)
 
-    if args.aspect_ratio_group_factor >= 0:
-        train_batch_sampler = samplers.GroupedBatchSampler(train_sampler, samplers.create_aspect_ratio_groups(aspect_ratios.tolist(), k = args.aspect_ratio_group_factor), args.train_batch_size)
-    else:
-        train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
+        if args.aspect_ratio_group_factor >= 0:
+            train_batch_sampler = samplers.GroupedBatchSampler(train_sampler, samplers.create_aspect_ratio_groups(aspect_ratios.tolist(), k = args.aspect_ratio_group_factor), args.train_batch_size)
+        else:
+            train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
     
-    collate_fn = lambda batch: tuple(zip(*batch))
-    train_data_loader  =  torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = collate_fn)
-    val_data_loader  =  torch.utils.data.DataLoader(val_dataset, batch_size = 1, sampler = val_sampler, num_workers = args.num_workers, collate_fn = collate_fn)
-    train_data_loader = torch.utils.data.DataLoader(train_dataset, sampler = train_sampler, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
+        train_data_loader = torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn, worker_init_fn = datasets.worker_init_fn)
+        val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size = args.val_batch_size, sampler = val_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn, worker_init_fn = datasets.worker_init_fn)
+    
+    elif args.mode == 'Mask2CAD':
 
-    #pretrained = args.pretrained, trainable_backbone_layers = args.trainable_backbone_layers, rpn_score_thresh = args.rpn_score_thresh if args.rpn_score_thresh is not None else None
-    breakpoint()
+        train_sampler_with_views = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
+        
+        val_sampler_with_views = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_rendered_view_dataset)
+        
+        train_data_loader = torch.utils.data.DataLoader(train_dataset_with_views, sampler = train_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
+        
+        val_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, sampler = val_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
+
+        shape_sampler_with_views = datasets.UniqueShapeRenderedViewsSequentialSampler(val_dataset_with_views, args.num_rendered_views)
+        shape_data_loader = torch.utils.data.DataLoader(val_dataset_with_views, sampler = shape_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
+    
+        shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
+
     model = models.Mask2CAD(num_categories = num_categories, object_rotation_quat = object_rotation_quat)
 
     model.to(args.device)
@@ -183,14 +182,9 @@ def main(args):
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
 
-
-    params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-
-    if args.lr_scheduler == 'MultiStepLR':
-        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones = args.lr_steps, gamma = args.lr_gamma)
-    elif args.lr_scheduler == 'CosineAnnealingLR':
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = args.epochs)
+    optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones = args.lr_steps, gamma = args.lr_gamma) if args.lr_scheduler == 'MultiStepLR' else torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = args.num_epochs) if args.lr_scheduler == 'CosineAnnealingLR' else None
 
     if args.resume:
         checkpoint = torch.load(args.resume, map_location='cpu')
@@ -199,14 +193,15 @@ def main(args):
         lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
         args.start_epoch = checkpoint['epoch'] + 1
 
-    if args.evaluate_only:
-        return evaluate(model, val_data_loader, evaluator_coco, evaluator_pix3d, device=args.device)
+    #if args.evaluate_only:
+    #    return evaluate(model, val_data_loader, evaluator_coco, evaluator_pix3d, device=args.device)
 
-    print('Start training')
-    start_time = time.time()
-    for epoch in range(args.start_epoch, args.epochs):
-        train_sampler.set_epoch(epoch)
-        train_one_epoch(model, optimizer, train_sampler, train_data_loader, args.device, epoch, args.print_freq, args)
+    tic = time.time()
+    for epoch in range(args.start_epoch, args.num_epochs):
+        breakpoint()
+        if train_data_loader.sampler is not None:
+            (getattr(train_data_loader.sampler, 'set_epoch', None) or print)(epoch)
+        train_one_epoch(model, optimizer, train_data_loader, args.device, epoch, args.print_freq, args)
         lr_scheduler.step()
 
         if args.output_path:
@@ -220,9 +215,9 @@ def main(args):
             utils.save_on_main(checkpoint, os.path.join(args.output_path, 'model_{}.pt'.format(epoch)))
             utils.save_on_main(checkpoint, os.path.join(args.output_path, 'checkpoint.pt'))
 
-        evaluate(model, val_data_loader, evaluator_coco, evaluator_pix3d, device=args.device)
+        evaluate(model, val_data_loader, evaluator_coco, evaluator_pix3d, device = args.device)
 
-    print('Training time', datetime.timedelta(seconds=int(time.time() - start_time)))
+    print('Training time', datetime.timedelta(seconds = int(time.time() - tic)))
 
 
 if __name__ == '__main__':
@@ -255,15 +250,12 @@ if __name__ == '__main__':
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start-epoch', default=0, type=int)
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)
-    parser.add_argument('--rpn-score-thresh', default=None, type=float, help='rpn score threshold for faster-rcnn')
-    parser.add_argument('--trainable-backbone-layers', default=None, type=int, help='number of trainable layers of backbone')
     parser.add_argument('--data-augmentation', default='hflip', help='data augmentation policy (default: hflip)')
     parser.add_argument('--convert-sync-batchnorm', action='store_true')
     parser.add_argument('--evaluate-only', action='store_true')
-    parser.add_argument('--pretrained', action='store_true')
     
     parser.add_argument('--mode', default = 'MaskRCNN', choices = ['MaskRCNN', 'Mask2CAD'] )
-    parser.add_argument('--loss-weights', default = dict(shape_embedding = 0.5, pose_classification = 0.25, pose_regression = 5.0, center_regression = 5.0), action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update(dict([v.split('=')])))))
+    parser.add_argument('--loss-weights', default = dict(shape_embedding = 0.5, pose_classification = 0.25, pose_regression = 5.0, center_regression = 5.0), action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update({k : float(v) for k, v in [v.split('=')]})))) 
     
     parser.add_argument('--dataset-rendered-views-root', default = 'data/pix3d_renders')
     parser.add_argument('--dataset-clustered-rotations', default = 'pix3d_clustered_viewpoints.json')
