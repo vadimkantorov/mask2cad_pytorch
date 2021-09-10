@@ -41,6 +41,11 @@ def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
 
 def mix_losses(loss_dict, loss_weights):
     return sum(loss_dict[k] * loss_weights[k] for k in loss_dict)
+       
+def to_device(images, targets, device):
+    images = images.to(device) 
+    targets = {k: v.to(device) if torch.is_tensor(v) else v for k, v in targets.items()}
+    return images, targets
 
 def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, args):
     model.train()
@@ -52,7 +57,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, ar
     batch = next(iter(data_loader))
     for images, targets in metric_logger.log_every(data_loader, print_freq, header = 'Epoch: [{}]'.format(epoch)):
         breakpoint()
-        images, targets = datasets.to_device(images, targets, device = args.device)
+        images, targets = to_device(images, targets, device = args.device)
 
         loss_dict = model(images, targets, mode = args.mode)
         losses = mix_losses(loss_dict, args.loss_weights) if args.mode == 'Mask2CAD' else sum(loss_dict.values())
@@ -71,50 +76,43 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, ar
 
 
 @torch.no_grad()
-def evaluate(model, data_loader, evaluator_coco, evaluator_pix3d, shape_retrieval, device):
+def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, device):
     model.eval()
     metric_logger = utils.MetricLogger(delimiter='  ')
     
-    evaluator_pix3d.clear()
+    evaluator_mesh.clear()
+    shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
 
     for images, targets in metric_logger.log_every(data_loader, 100, header = 'Test:'):
-        images, targets = datasets.to_device(images, targets, device = args.device)
+        images, targets = to_device(images, targets, device = args.device)
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        
         tic = time.time()
-        outputs = model(images, mode = args.device)
+        outputs = model(images, mode = args.device, shape_retrieval = shape_retrieval)
         outputs = [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
-        res = {target['image_id'].item(): output for target, output in zip(targets, outputs)}
         
         toc_model = time.time() - tic
         tic = time.time()
-        coco_evaluator.update(res)
-        toc_evaluator = time.time() - tic
-        metric_logger.update(model_time = toc_model, evaluator_time = toc_evaluator)
+        evaluator_detection.update({target['image_id'].item(): output for target, output in zip(targets, outputs)})
+        toc_evaluator_detection = time.time() - tic
         
         image_id = extra['image']
         scores = torch.ones(1)
         pred_classes = torch.tensor([extra['category_idx']])[None]
         pred_masks = extra['mask']
-        
-        gt_mesh = pytorch3d.io.load_obj(os.path.join(val_dataset.root, extra['shape']), load_textures = False)
-        pred_meshes = [(gt_mesh[0], gt_mesh[1].verts_idx)] 
-        pred_dz = torch.tensor([0.3])[None]
-        
-        val_evaluator.update({image_id : dict(instances = dict(scores = scores, pred_boxes = pred_boxes, pred_classes = pred_classes, pred_masks = pred_masks, pred_meshes = pred_meshes, pred_dz = pred_dz)) })
+        evaluator_detection.update(res)
+        evaluator_mesh.update({image_id : dict(instances = dict(scores = scores, pred_boxes = pred_boxes, pred_classes = pred_classes, pred_masks = pred_masks, pred_meshes = pred_meshes, pred_dz = pred_dz)) })
         #detections = model(img, bbox = bbox, category_idx = category_idx, shape_retrieval = shape_retrieval)
+        metric_logger.update(model_time = toc_model, evaluator_time = toc_evaluator_detection)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print('Averaged stats:', metric_logger)
-    coco_evaluator.synchronize_between_processes()
+    evaluator_detection.synchronize_between_processes()
 
     # accumulate predictions from all images
-    coco_evaluator.accumulate()
-    coco_evaluator.summarize()
-    return coco_evaluator
+    evaluator_detection.accumulate()
+    evaluator_detection.summarize()
+    print('Pix3d', evaluator_mesh())
 
 def build_transform(train, data_augmentation):
     return transforms.DetectionPresetTrain(data_augmentation) if train else transforms.DetectionPresetEval()
@@ -130,15 +128,15 @@ def main(args):
     utils.init_distributed_mode(args)
 
     train_dataset = datasets.Pix3d(args.dataset_root, split_path = args.train_metadata_path)
-    aspect_ratios,  num_categories = train_dataset.aspect_ratios, len(train_dataset.categories)
+    aspect_ratios, num_categories = train_dataset.aspect_ratios, len(train_dataset.categories)
     train_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset)
     object_rotation_quat = train_dataset_with_views.clustered_rotations
     
     val_dataset = datasets.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
     val_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_dataset)
     
-    evaluator_coco = coco_eval.CocoEvaluator(val_dataset.as_coco_dataset(), ['bbox', 'segm'])
-    evaluator_pix3d = None #pix3d_eval.Pix3dEvaluator(val_dataset)
+    evaluator_detection = coco_eval.CocoEvaluator(val_dataset.as_coco_dataset(), ['bbox', 'segm'])
+    evaluator_mesh = pix3d_eval.Pix3dEvaluator(val_dataset)
    
     if args.mode == 'MaskRCNN':
         
@@ -154,8 +152,9 @@ def main(args):
         else:
             train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
     
-        train_data_loader = torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn, worker_init_fn = datasets.worker_init_fn)
-        val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size = args.val_batch_size, sampler = val_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn, worker_init_fn = datasets.worker_init_fn)
+        train_data_loader = torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
+        val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size = args.val_batch_size, sampler = val_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
+        shape_data_loader = None
     
     elif args.mode == 'Mask2CAD':
 
@@ -163,14 +162,12 @@ def main(args):
         
         val_sampler_with_views = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_rendered_view_dataset)
         
-        train_data_loader = torch.utils.data.DataLoader(train_dataset_with_views, sampler = train_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
+        train_data_loader = torch.utils.data.DataLoader(train_dataset_with_views, sampler = train_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True)
         
-        val_data_loader = torch.utils.data.DataLoader(val_rendered_view_dataset, sampler = val_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
+        val_data_loader = torch.utils.data.DataLoader(val_dataset_with_views, sampler = val_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True)
 
         shape_sampler_with_views = datasets.UniqueShapeRenderedViewsSequentialSampler(val_dataset_with_views, args.num_rendered_views)
-        shape_data_loader = torch.utils.data.DataLoader(val_dataset_with_views, sampler = shape_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True, worker_init_fn = datasets.worker_init_fn)
-    
-        shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
+        shape_data_loader = torch.utils.data.DataLoader(val_dataset_with_views, sampler = shape_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True)
 
     model = models.Mask2CAD(num_categories = num_categories, object_rotation_quat = object_rotation_quat)
 
@@ -193,8 +190,8 @@ def main(args):
         lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
         args.start_epoch = checkpoint['epoch'] + 1
 
-    #if args.evaluate_only:
-    #    return evaluate(model, val_data_loader, evaluator_coco, evaluator_pix3d, device=args.device)
+    if args.evaluate_only:
+        return evaluate(model, val_data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, device=args.device)
 
     tic = time.time()
     for epoch in range(args.start_epoch, args.num_epochs):
@@ -204,7 +201,7 @@ def main(args):
         train_one_epoch(model, optimizer, train_data_loader, args.device, epoch, args.print_freq, args)
         lr_scheduler.step()
 
-        if args.output_path:
+        if False and args.output_path:
             checkpoint = dict(
                 model = model_without_ddp.state_dict(),
                 optimizer = optimizer.state_dict(),
@@ -215,7 +212,7 @@ def main(args):
             utils.save_on_main(checkpoint, os.path.join(args.output_path, 'model_{}.pt'.format(epoch)))
             utils.save_on_main(checkpoint, os.path.join(args.output_path, 'checkpoint.pt'))
 
-        evaluate(model, val_data_loader, evaluator_coco, evaluator_pix3d, device = args.device)
+        evaluate(model, val_data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, device = args.device)
 
     print('Training time', datetime.timedelta(seconds = int(time.time() - tic)))
 
@@ -246,7 +243,7 @@ if __name__ == '__main__':
     parser.add_argument('--decay-gamma', type = float, default = 0.1)
 
     parser.add_argument('--print-freq', default=20, type=int)
-    parser.add_argument('--output-path', '-o', default='data')
+    parser.add_argument('--output-path', '-o', default = 'data')
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start-epoch', default=0, type=int)
     parser.add_argument('--aspect-ratio-group-factor', default=3, type=int)

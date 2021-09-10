@@ -49,8 +49,8 @@ class RenderedViewsRandomSampler(torch.utils.data.Sampler):
 
 class UniqueShapeRenderedViewsSequentialSampler(torch.utils.data.Sampler):
     def __init__(self, dataset, num_rendered_views):
-        shape2idx = {m['shape_path'] : i for i, m in enumerate(dataset)}
-        self.idx = torch.cat([torch.tensor(shape2idx.values(), dtype = torch.int64).unsqueeze(-1), torch.arange(1, 1 + num_rendered_views, dtype = torch.int64).repeat(len(shape2idx), 1))
+        shape2idx = {m['model'] : i for i, m in enumerate(dataset.dataset.metadata)}
+        self.idx = torch.cat([torch.tensor(list(shape2idx.values()), dtype = torch.int64).unsqueeze(-1), torch.arange(1, 1 + num_rendered_views, dtype = torch.int64).repeat(len(shape2idx), 1)], dim = -1)
         
     def __iter__(self):
         return iter(self.idx.tolist())
@@ -69,9 +69,10 @@ class RenderedViews(torchvision.datasets.VisionDataset):
         img, extra = self.dataset[idx[0]]
         view_dir = os.path.join(self.root, extra['shape_path'])
         or_jpg = lambda path, ext = '.png': torchvision.io.read_image(path if os.path.exists(path) else path.replace(ext, '.jpg'))
-        no_img = lambda idx: [i for i in idx if i > 0]
+        no_img = lambda idx: [k for k in idx if k > 0]
+        fixup = lambda path: path if os.path.exists(path) else os.path.join(os.path.dirname(os.path.dirname(path)), 'model.obj', os.path.basename(path))
         
-        views = torch.stack([or_jpg(os.path.join(self.root, extra['image_id']) if k == 0 else os.path.join(view_dir, f'{k:04}' + self.ext)) for k in no_img(idx[1:])])
+        views = torch.stack([or_jpg(os.path.join(self.root, extra['image_id']) if k == 0 else fixup(os.path.join(view_dir, f'{k:04}' + self.ext))) for k in no_img(idx[1:])])
 
         return img, extra, views.expand(-1, 3, -1, -1) / 255.0
 
@@ -219,19 +220,10 @@ def collate_fn(batch):
    
     return images, targets
 
+def _collate_fn(batch):
+    return tuple(zip(*batch))
+
 def _to_device(batch, device):
     images = [image.to(device) for image in images]
     targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
     return images, targets
-
-def _collate_fn(batch):
-    return tuple(zip(*batch))
-       
-def to_device(images, targets, device):
-    images = images.to(device) 
-    targets = {k: v.to(device) if torch.is_tensor(v) else v for k, v in targets.items()}
-    return images, targets
-
-def worker_init_fn(worker_id, num_threads = 1):
-    torch.manual_seed(worker_id)
-    #torch.cuda.manual_seed_all(worker_id) if torch.cuda.is_available() else None

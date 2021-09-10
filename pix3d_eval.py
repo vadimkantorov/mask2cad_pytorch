@@ -14,7 +14,7 @@ import pytorch3d.io, pytorch3d.structures, pytorch3d.utils, pytorch3d.ops
 class Pix3dEvaluator(dict):
     def __init__(self, dataset):
         self.dataset = dataset
-        self.mesh_cache = {model_path : (mesh[0], mesh[1].verts_idx) for model_path in dataset.shape_idx for mesh in [pytorch3d.io.load_obj(os.path.join(dataset.root, model_path), load_textures = False)]}
+        self.mesh_cache = None
     
     def getCatIds(self):
         return list(range(len(self.dataset.categories)))
@@ -36,6 +36,9 @@ class Pix3dEvaluator(dict):
         super().update(predictions)
     
     def __call__(self, iou_thresh = 0.5):
+        if not self.mesh_cache:
+             self.mesh_cache = {model_path : (mesh[0], mesh[1].verts_idx) for model_path in dataset.shape_idx for mesh in [pytorch3d.io.load_obj(os.path.join(dataset.root, model_path), load_textures = False)]}
+
         pix3d_metrics = evaluate_for_pix3d([dict(image_id = image_id, instances = pred) for image_id, pred in self.items()], npos = self.dataset.num_by_category, thing_dataset_id_to_contiguous_id = {k : k for k in range(len(self.dataset.categories))}, cocoapi = self, image_root = self.dataset.root, mesh_models = self.mesh_cache, iou_thresh = iou_thresh)
         print("Box  AP %.5f" % (pix3d_metrics["box_ap@%.1f"  % iou_thresh]))
         print("Mask AP %.5f" % (pix3d_metrics["mask_ap@%.1f" % iou_thresh]))
