@@ -20,8 +20,7 @@ class ShapeRetrieval(nn.Module):
 class Mask2CAD(nn.Module):
     def __init__(self, *, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, **kwargs_backbone):
         super().__init__()
-        # TODO: buffer?
-        self.object_rotation_quat = object_rotation_quat
+        self.register_buffer('object_rotation_quat', object_rotation_quat)
         self.num_rotation_clusters = num_rotation_clusters
         self.num_categories_with_bg = num_categories
         self.num_detections_per_image = num_detections_per_image
@@ -50,17 +49,28 @@ class Mask2CAD(nn.Module):
         self.pose_refinement_branch[-1].bias.zero_()
         self.pose_refinement_branch[-1].bias[3::4] = quat_fill # xyzw
 
-    def forward(self, img, targets, shape_retrieval = None, mode = None, P = 4, N = 8):
+    def forward(self, images, targets, shape_retrieval = None, mode = None, P = 4, N = 8):
         if mode == 'MaskRCNN':
-            return self.object_detector(img, targets)
+            return self.object_detector(images, targets)
         
         bbox, category_idx, shape_idx, object_location, object_rotation_quat = map(targets.get, ['boxes', 'labels', 'shape_idx', 'object_location', 'object_rotation_quat'])
         
         if bbox is not None and category_idx is not None:
-            detections = [dict(boxes = b, labels = c) for b, c in zip(bbox, category_idx)]
-            images = self.object_detector.transform(images)[0]
-            img_features = self.object_detector.backbone(images.tensors)
-            box_features = self.object_detector.roi_heads.box_roi_pool(img_features, bbox.unbind(), images.image_sizes)
+            # TODO: boxes xyxy? xywh?
+            num_boxes = [bbox.shape[1]] * len(bbox)
+            images_nested = self.object_detector.transform(images)[0]
+            img_features = self.object_detector.backbone(images_nested.tensors)
+            box_features = self.object_detector.roi_heads.box_roi_pool(img_features, bbox.unbind(), images_nested.image_sizes)
+            class_logits, box_regression = self.object_detector.roi_heads.box_predictor(self.object_detector.roi_heads.box_head(box_features))
+            scores = F.softmax(class_logits, dim = -1)
+            mask_features = self.object_detector.roi_heads.mask_roi_pool(img_features, bbox.unbind(), images_nested.image_sizes)
+            mask_features = self.object_detector.roi_heads.mask_head(mask_features)
+            mask_logits = self.object_detector.roi_heads.mask_predictor(mask_features)
+            
+            box_scores = self.index_left(scores, category_idx.flatten())
+            mask_probs = self.index_left(mask_logits, category_idx.flatten()).sigmoid()
+            
+            detections = [dict(boxes = b, labels = c, scores = s, masks = m) for b, c, s, m in zip(bbox, category_idx, box_scores.split(num_boxes), mask_probs.split(num_boxes))]
 
         else:
             detections = self.object_detector(images)
@@ -97,9 +107,11 @@ class Mask2CAD(nn.Module):
             object_location = center_xy + self.index_left(center_delta, category_idx) * width_height
 
             shape_idx = shape_retrieval(shape_embedding)[1] if shape_retrieval is not None else -torch.ones_like(sum(num_boxes))
+            image_id = targets['image_id'] if targets else [None] * len(images)
 
             num_boxes = [len(d['boxes']) for d in detections]
-            for d, l, r, s, i in zip(detections, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes), shape_idx):
+            for d, g, l, r, s, i in zip(detections, image_id, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes), shape_idx):
+                d['image_id'] = g
                 d['location3d_center_xy'] = l
                 d['rotation3d_quat'] = r
                 d['shape_embedding'] = s if shape_retrieval is None else None

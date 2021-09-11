@@ -56,7 +56,6 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, ar
 
     batch = next(iter(data_loader))
     for images, targets in metric_logger.log_every(data_loader, print_freq, header = 'Epoch: [{}]'.format(epoch)):
-        breakpoint()
         images, targets = to_device(images, targets, device = args.device)
 
         loss_dict = model(images, targets, mode = args.mode)
@@ -78,7 +77,7 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, ar
 @torch.no_grad()
 def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, device):
     model.eval()
-    metric_logger = utils.MetricLogger(delimiter='  ')
+    metric_logger = utils.MetricLogger(delimiter = '  ')
     
     evaluator_mesh.clear()
     shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
@@ -87,32 +86,32 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
         images, targets = to_device(images, targets, device = args.device)
 
         tic = time.time()
-        outputs = model(images, mode = args.device, shape_retrieval = shape_retrieval)
+        outputs = model(images, targets, mode = args.device, shape_retrieval = shape_retrieval)
         outputs = [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
-        
         toc_model = time.time() - tic
+
         tic = time.time()
-        evaluator_detection.update({target['image_id'].item(): output for target, output in zip(targets, outputs)})
+        evaluator_detection.update({output['image_id']: dict(output, masks = output['masks'][:, None]) for output in outputs})
         toc_evaluator_detection = time.time() - tic
         
-        image_id = extra['image']
-        scores = torch.ones(1)
-        pred_classes = torch.tensor([extra['category_idx']])[None]
-        pred_masks = extra['mask']
-        evaluator_detection.update(res)
-        evaluator_mesh.update({image_id : dict(instances = dict(scores = scores, pred_boxes = pred_boxes, pred_classes = pred_classes, pred_masks = pred_masks, pred_meshes = pred_meshes, pred_dz = pred_dz)) })
-        #detections = model(img, bbox = bbox, category_idx = category_idx, shape_retrieval = shape_retrieval)
-        metric_logger.update(model_time = toc_model, evaluator_time = toc_evaluator_detection)
+        tic = time.time()
+        evaluator_mesh.update({ output['image_id'] : dict(instances = dict(scores = output['scores'], pred_boxes = output['boxes'], pred_classes = output['labels'], pred_masks = output['masks'])) for output in outputs })
+        # pred_meshes = pred_meshes
+        toc_evaluator_mesh = time.time() - tic
+
+        metric_logger.update(time_model = toc_model, time_evaluator_detection = toc_evaluator_detection, time_evaluator_mesh = toc_evaluator_mesh)
+        break
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print('Averaged stats:', metric_logger)
+    
     evaluator_detection.synchronize_between_processes()
-
-    # accumulate predictions from all images
     evaluator_detection.accumulate()
-    evaluator_detection.summarize()
-    print('Pix3d', evaluator_mesh())
+    
+    print('Detection', evaluator_detection.summarize())
+    breakpoint()
+    print('Mesh', evaluator_mesh.summarize())
 
 def build_transform(train, data_augmentation):
     return transforms.DetectionPresetTrain(data_augmentation) if train else transforms.DetectionPresetEval()

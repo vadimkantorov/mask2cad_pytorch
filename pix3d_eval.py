@@ -32,14 +32,14 @@ class Pix3dEvaluator(dict):
         return [dict(image_id = i, segmentation = m['mask'], rot_mat = m['rot_mat'], trans_mat = m['trans_mat'], model = m['model'], category_id = self.dataset.category_idx[m['category']], bbox = m['bbox'][:2] + [m['bbox'][2] - m['bbox'][0] + 1, m['bbox'][3] - m['bbox'][1] + 1], K = [m['focal_length'] * m['img_size'][0] / 32, m['img_size'][0] / 2, m['img_size'][1] / 2]) for i in ids for m in [self.dataset.image_idx[i]['m']]]
 
     def update(self, predictions):
-        predictions = { image_id : dict(instances = dict(pred['instances'], pred_masks_rle = [dict(rle, counts = rle['counts'].decode('utf-8')) for mask in pred_masks for rle in [pycocotools.mask.encode(np.array(mask[:, :, None], order='F', dtype='uint8'))[0]]] )) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
+        predictions = { image_id : dict(image_id = image_id, instances = dict(pred['instances'], pred_masks_rle = [dict(rle, counts = rle['counts'].decode('utf-8')) for mask in pred_masks for rle in [pycocotools.mask.encode(np.array(mask[:, :, None], order='F', dtype='uint8'))[0]]]    )) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
         super().update(predictions)
     
-    def __call__(self, iou_thresh = 0.5):
+    def summarize(self, iou_thresh = 0.5):
         if not self.mesh_cache:
-             self.mesh_cache = {model_path : (mesh[0], mesh[1].verts_idx) for model_path in dataset.shape_idx for mesh in [pytorch3d.io.load_obj(os.path.join(dataset.root, model_path), load_textures = False)]}
+             self.mesh_cache = {model_path : (mesh[0], mesh[1].verts_idx) for model_path in self.dataset.shape_idx for mesh in [pytorch3d.io.load_obj(os.path.join(self.dataset.root, model_path), load_textures = False)]}
 
-        pix3d_metrics = evaluate_for_pix3d([dict(image_id = image_id, instances = pred) for image_id, pred in self.items()], npos = self.dataset.num_by_category, thing_dataset_id_to_contiguous_id = {k : k for k in range(len(self.dataset.categories))}, cocoapi = self, image_root = self.dataset.root, mesh_models = self.mesh_cache, iou_thresh = iou_thresh)
+        pix3d_metrics = evaluate_for_pix3d(list(self.values()), npos = self.dataset.num_by_category, thing_dataset_id_to_contiguous_id = {k : k for k in range(len(self.dataset.categories))}, cocoapi = self, image_root = self.dataset.root, mesh_models = self.mesh_cache, iou_thresh = iou_thresh)
         print("Box  AP %.5f" % (pix3d_metrics["box_ap@%.1f"  % iou_thresh]))
         print("Mask AP %.5f" % (pix3d_metrics["mask_ap@%.1f" % iou_thresh]))
         print("Mesh AP %.5f" % (pix3d_metrics["mesh_ap@%.1f" % iou_thresh]))
@@ -106,12 +106,12 @@ def evaluate_for_pix3d(
         else:
             meshes = pytorch3d.utils.ico_sphere(4, device)
             meshes = meshes.extend(num_img_preds).to(device)
-        assert "pred_dz" in prediction["instances"], "Z range of box not predicted"
+        ##assert "pred_dz" in prediction["instances"], "Z range of box not predicted"
         
-        pred_dz = prediction["instances"]["pred_dz"]
+        ##pred_dz = prediction["instances"]["pred_dz"]
         heights = boxes[:, 3] - boxes[:, 1]
         # NOTE see appendix for derivation of pred dz
-        pred_dz = pred_dz[:, 0] * heights.cpu()
+        ##pred_dz = pred_dz[:, 0] * heights.cpu()
         #assert list(prediction["instances"]["image_size"]) == [image_height, image_width]
 
         # ground truth
@@ -167,17 +167,17 @@ def evaluate_for_pix3d(
         # from the image. See appendix for more.
         tc = (gt_zrange[1] + gt_zrange[0]) / 2.0
         # Given a center location (tc) and a focal_length,
-        # pred_dz = pred_dz * box_h * tc / focal_length
+        ## pred_dz = pred_dz * box_h * tc / focal_length
         # See appendix for more.
-        #zranges = torch.stack(
-        #    [
-        #        torch.stack(
-        #            [tc - tc * pred_dz[i] / 2.0 / gt_K[0], tc + tc * pred_dz[i] / 2.0 / gt_K[0]]
-        #        )
-        #        for i in range(len(meshes))
-        #    ],
-        #    dim=0,
-        #)
+        ##zranges = torch.stack(
+        ##    [
+        ##        torch.stack(
+        ##            [tc - tc * pred_dz[i] / 2.0 / gt_K[0], tc + tc * pred_dz[i] / 2.0 / gt_K[0]]
+        ##        )
+        ##        for i in range(len(meshes))
+        ##    ],
+        ##    dim=0,
+        ##)
 
         gt_Ks = gt_K.view(1, 3).expand(len(meshes), 3)
         
