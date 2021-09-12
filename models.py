@@ -57,7 +57,6 @@ class Mask2CAD(nn.Module):
         
         # input / output boxes are xyxy
         if bbox is not None and category_idx is not None:
-            # TODO: boxes xyxy? xywh?
             num_boxes = [bbox.shape[1]] * len(bbox)
             images_nested = self.object_detector.transform(images)[0]
             img_features = self.object_detector.backbone(images_nested.tensors)
@@ -70,7 +69,6 @@ class Mask2CAD(nn.Module):
             
             box_scores = self.index_left(scores, category_idx.flatten())
             mask_probs = self.index_left(mask_logits, category_idx.flatten()).sigmoid()
-            
             detections = [dict(boxes = b, labels = c, scores = s, masks = m) for b, c, s, m in zip(bbox, category_idx, box_scores.split(num_boxes), mask_probs.split(num_boxes))]
 
         else:
@@ -79,9 +77,9 @@ class Mask2CAD(nn.Module):
             mask_logits = self.object_detector.roi_heads.mask_predictor.output
             category_idx = torch.cat([d['labels'] for d in detections])
             mask_probs = self.index_left(mask_logits, category_idx).sigmoid()
-            box_features = F.interpolate(box_features, mask_probs.shape[-2:]) * mask_probs.unsqueeze(-3)
             bbox = torch.cat([d['boxes'] for d in detections])
         
+        box_features = F.interpolate(box_features, mask_probs.shape[-2:]) * mask_probs.unsqueeze(-3)
         shape_embedding = self.shape_embedding_branch(box_features)
         object_rotation_bins = self.pose_classification_branch(box_features).unflatten(-1, (self.num_categories_with_bg, self.num_rotation_clusters))
         object_rotation_delta = self.pose_refinement_branch(box_features).unflatten(-1, (self.num_categories_with_bg, 4))
