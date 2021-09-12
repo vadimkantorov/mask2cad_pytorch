@@ -85,8 +85,7 @@ def evaluate_for_pix3d(
         masks_rles = prediction["instances"]["pred_masks_rle"]
 
         assert "pred_meshes" in prediction["instances"]
-        breakpoint()
-        meshes = [mesh_models[prediction["instances"]["pred_meshes"]]]  # preditected meshes
+        meshes = [mesh_models[shape_path] for shape_path in prediction["instances"]["pred_meshes"]]  # preditected meshes
         verts = [mesh[0] for mesh in meshes]
         faces = [mesh[1] for mesh in meshes]
         meshes = pytorch3d.structures.Meshes(verts=verts, faces=faces).to(device)

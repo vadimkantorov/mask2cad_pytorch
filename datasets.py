@@ -194,7 +194,6 @@ class Pix3d(torchvision.datasets.VisionDataset):
         return imgIds
     
     def loadAnns(self, ids):
-        breakpoint()
         return [dict(image_id = i, segmentation = m['mask'], rot_mat = m['rot_mat'], trans_mat = m['trans_mat'], model = m['model'], category_id = self.category_idx[m['category']], bbox = m['bbox'][:2] + [m['bbox'][2] - m['bbox'][0] + 1, m['bbox'][3] - m['bbox'][1] + 1], K = [m['focal_length'] * m['img_size'][0] / 32, m['img_size'][0] / 2, m['img_size'][1] / 2]) for i in ids for m in [self.image_idx[i]['m']]]
     
 
@@ -219,12 +218,4 @@ def collate_fn(batch):
         views = torch.stack([b[2] for b in batch]) if len(batch[0]) > 2 else None
     )
    
-    return images, targets
-
-def _collate_fn(batch):
-    return tuple(zip(*batch))
-
-def _to_device(batch, device):
-    images = [image.to(device) for image in images]
-    targets = [{k: v.to(device) if torch.is_tensor(v) else v for k, v in t.items()} for t in targets]
     return images, targets

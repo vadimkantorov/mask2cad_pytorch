@@ -55,6 +55,7 @@ class Mask2CAD(nn.Module):
         
         bbox, category_idx, shape_idx, object_location, object_rotation_quat = map(targets.get, ['boxes', 'labels', 'shape_idx', 'object_location', 'object_rotation_quat'])
         
+        # input / output boxes are xyxy
         if bbox is not None and category_idx is not None:
             # TODO: boxes xyxy? xywh?
             num_boxes = [bbox.shape[1]] * len(bbox)
