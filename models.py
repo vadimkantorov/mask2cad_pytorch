@@ -10,12 +10,12 @@ import quat
 class ShapeRetrieval(nn.Module):
     def __init__(self, data_loader, rendered_view_encoder):
         super().__init__()
-        self.shape_embedding, self.category_idx, self.shape_idx = zip(*[(rendered_view_encoder(targets['views'].flatten(end_dim = -4)), targets['labels'].repeat(1, targets['views'].shape[-4]).flatten(), targets['shape_idx'].repeat(1, targets['views'].shape[-4]).flatten()  ) for img, targets in data_loader])
-        self.shape_embedding, self.category_idx, self.shape_idx = F.normalize(torch.cat(self.shape_embedding), dim = -1), torch.cat(self.category_idx), torch.cat(self.shape_idx)
-        
+        self.shape_embedding, self.category_idx, self.shape_idx, self.shape_path = zip(*[(rendered_view_encoder(targets['views'].flatten(end_dim = -4)), targets['labels'].repeat(1, targets['views'].shape[-4]).flatten(), targets['shape_idx'].repeat(1, targets['views'].shape[-4]).flatten(), [pp for p in targets['shape_path'] for pp in [p] * targets['views'].shape[-4] ]  ) for img, targets in data_loader])
+        self.shape_embedding, self.category_idx, self.shape_idx, self.shape_path = F.normalize(torch.cat(self.shape_embedding), dim = -1), torch.cat(self.category_idx), torch.cat(self.shape_idx), [s for b in self.shape_path for s in b]
+    
     def forward(self, shape_embedding):
         idx = (F.normalize(shape_embedding, dim = -1) @ self.shape_embedding.t()).argmax(dim = -1)
-        return self.category_idx[idx], self.shape_idx[idx]
+        return self.category_idx[idx], self.shape_idx[idx], [self.shape_path[i] for i in idx.tolist()]
 
 class Mask2CAD(nn.Module):
     def __init__(self, *, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, **kwargs_backbone):
@@ -105,17 +105,18 @@ class Mask2CAD(nn.Module):
             object_rotation = quat.quatprod(anchor_quat, self.index_left(object_rotation_delta, category_idx))
             center_xy, width_height = self.xyxy_to_cxcywh(bbox).split(2, dim = -1)
             object_location = center_xy + self.index_left(center_delta, category_idx) * width_height
+            num_boxes = [len(d['boxes']) for d in detections]
 
-            shape_idx = shape_retrieval(shape_embedding)[1] if shape_retrieval is not None else -torch.ones_like(sum(num_boxes))
+            shape_idx, shape_path = shape_retrieval(shape_embedding)[1:] if shape_retrieval is not None else (-torch.ones_like(sum(num_boxes)), [None] * sum(num_boxes))
             image_id = targets['image_id'] if targets else [None] * len(images)
 
-            num_boxes = [len(d['boxes']) for d in detections]
-            for d, g, l, r, s, i in zip(detections, image_id, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes), shape_idx):
+            for d, g, l, r, s, i, p in zip(detections, image_id, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes), shape_idx.split(num_boxes), self.split_list(shape_path, num_boxes)):
                 d['image_id'] = g
                 d['location3d_center_xy'] = l
                 d['rotation3d_quat'] = r
                 d['shape_embedding'] = s if shape_retrieval is None else None
                 d['shape_idx'] = i if shape_retrieval is not None else None
+                d['shape_path'] = p if shape_retrieval is not None else None
 
             return detections
     
@@ -166,6 +167,12 @@ class Mask2CAD(nn.Module):
     @staticmethod
     def index_left(tensor, I):
         return tensor.gather(I.ndim, I[(...,) + (None,) * (tensor.ndim - I.ndim)].expand((-1,) * (I.ndim + 1) + tensor.shape[I.ndim + 1:])).squeeze(I.ndim)
+
+    @staticmethod
+    def split_list(l, n):
+        cumsum = torch.tensor(n).cumsum(dim = -1).tolist()
+        return [l[(cumsum[i - 1] if i >= 1 else 0) : cumsum[i]] for i in range(len(cumsum))]
+        
 
 class CacheInputOutput(nn.Module):
     def __init__(self, model):

@@ -95,7 +95,7 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
         toc_evaluator_detection = time.time() - tic
         
         tic = time.time()
-        evaluator_mesh.update({ output['image_id'] : dict(instances = dict(scores = output['scores'], pred_boxes = output['boxes'], pred_classes = output['labels'], pred_masks = output['masks'])) for output in outputs })
+        evaluator_mesh.update({ output['image_id'] : dict(instances = dict(scores = output['scores'], pred_boxes = output['boxes'], pred_classes = output['labels'], pred_masks = output['masks'], pred_meshes = output['shape_path'])) for output in outputs })
         # pred_meshes = pred_meshes
         toc_evaluator_mesh = time.time() - tic
 
@@ -110,7 +110,6 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
     evaluator_detection.accumulate()
     
     print('Detection', evaluator_detection.summarize())
-    breakpoint()
     print('Mesh', evaluator_mesh.summarize())
 
 def build_transform(train, data_augmentation):
@@ -194,7 +193,6 @@ def main(args):
 
     tic = time.time()
     for epoch in range(args.start_epoch, args.num_epochs):
-        breakpoint()
         if train_data_loader.sampler is not None:
             (getattr(train_data_loader.sampler, 'set_epoch', None) or print)(epoch)
         train_one_epoch(model, optimizer, train_data_loader, args.device, epoch, args.print_freq, args)
