@@ -47,6 +47,11 @@ def to_device(images, targets, device):
     targets = {k: v.to(device) if torch.is_tensor(v) else v for k, v in targets.items()}
     return images, targets
 
+def recall(pred_idx, true_idx, K = 1):
+    true_idx = true_idx.unsqueeze(-1) if true_idx.ndim < pred_idx.ndim else true_idx 
+    assert pred_idx.shape == true_idx.shap
+    return (pred_idx == true_idx).any(dim = -1).float().mean()
+
 def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, args):
     model.train()
     metric_logger = utils.MetricLogger(delimiter='  ')
@@ -79,9 +84,10 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
     model.eval()
     metric_logger = utils.MetricLogger(delimiter = '  ')
     
-    evaluator_mesh.clear()
     shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
-
+    pred_shape_idx, true_shape_idx = [], []
+    pred_category_idx, true_category_idx = [], []
+    
     for images, targets in metric_logger.log_every(data_loader, 100, header = 'Test:'):
         images, targets = to_device(images, targets, device = args.device)
 
@@ -90,17 +96,24 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
         outputs = [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
         toc_model = time.time() - tic
 
+        pred_shape_idx.extend(o['shape_idx_all'] for o in outputs)
+        true_shape_idx.extend(targets['shape_idx'])
+        pred_category_idx.extend(o['labels'] for o in outputs)
+        true_category_idx.extend(targets['labels'])
+
         tic = time.time()
-        evaluator_detection.update({output['image_id']: dict(output, masks = output['masks'][:, None]) for output in outputs})
+        evaluator_detection.update({ output['image_id']: dict(output, masks = output['masks'][:, None]) for output in outputs })
         toc_evaluator_detection = time.time() - tic
         
         tic = time.time()
         evaluator_mesh.update({ output['image_id'] : dict(instances = dict(scores = output['scores'], pred_boxes = output['boxes'], pred_classes = output['labels'], pred_masks = output['masks'], pred_meshes = output['shape_path'])) for output in outputs })
-        # pred_meshes = pred_meshes
         toc_evaluator_mesh = time.time() - tic
 
         metric_logger.update(time_model = toc_model, time_evaluator_detection = toc_evaluator_detection, time_evaluator_mesh = toc_evaluator_mesh)
         break
+    
+    recall_shape = recall(torch.cat(pred_shape_idx), torch.cat(true_shape_idx), K = 5)
+    recall_category = recall(torch.cat(pred_category_idx), torch.cat(true_category_idx), K = 1)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

@@ -80,6 +80,7 @@ class RenderedViews(torchvision.datasets.VisionDataset):
         return len(self.dataset)
 
 class Pix3d(torchvision.datasets.VisionDataset):
+    #TODO: add zero background category?
     categories           = ['bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
     categories_coco_inds = [65   , -1        , 63      , -1   , -1    ,  63   , 67     , -1    ,  -1       ]
 
@@ -93,7 +94,8 @@ class Pix3d(torchvision.datasets.VisionDataset):
         
         assert set(collections.Counter(m['img'] for m in metadata_full).values()) == {1}
         
-        self.shape_idx = {t        : i for i, t in enumerate(sorted(set(m['model'] for m in metadata_full)))}
+        self.shapes = sorted(set(m['model'] for m in metadata_full))
+        self.shape_idx = {t        : i for i, t in enumerate(self.shapes)}
         self.category_idx = {category : i for i, category in enumerate(self.categories)}
 
         if split_path:
