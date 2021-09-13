@@ -102,7 +102,7 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
         true_category_idx.extend(targets['labels'])
 
         tic = time.time()
-        evaluator_detection.update({ output['image_id']: dict(output, masks = output['masks'][:, None]) for output in outputs })
+        evaluator_detection.update({ output['image_id']: dict(output, masks = output['masks']) for output in outputs })
         toc_evaluator_detection = time.time() - tic
         
         tic = time.time()
