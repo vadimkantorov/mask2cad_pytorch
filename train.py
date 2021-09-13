@@ -33,6 +33,7 @@ import transforms
 import utils
 import quat
 
+import pix3d
 import pix3d_eval
 import coco_eval 
 
@@ -126,27 +127,21 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
         recall_shape = recall(pred_shape_idx.cat(), true_shape_idx.cat(), K = 5)
         recall_category = recall(pred_category_idx.cat(), true_category_idx.cat(), K = 1)
         print('Detection', evaluator_detection.evaluate())
-        print('Mesh', evaluator_mesh.evaluate())
+        print('Mesh', evaluator_mesh.evaluate()) #TODO: average by category
 
-def build_transform(train, data_augmentation):
-    return transforms.DetectionPresetTrain(data_augmentation) if train else transforms.DetectionPresetEval()
-    
-    transforms = []
-    transforms.append(T.ToTensor())
-    if train:
-        transforms.append(T.RandomHorizontalFlip(0.5))
-    return T.Compose(transforms)
+def build_transforms(mode):
+    return transforms.DetectionPresetTrain(data_augmentation)
 
 def main(args):
     os.makedirs(args.output_path, exist_ok = True)
     utils.init_distributed_mode(args)
 
-    train_dataset = datasets.Pix3d(args.dataset_root, split_path = args.train_metadata_path)
+    train_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.train_metadata_path, transforms = build_transforms(args.mode) if args.mode == 'MaskRCNN' else None)
     aspect_ratios, num_categories = train_dataset.aspect_ratios, len(train_dataset.categories)
-    train_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset)
+    train_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset, transforms = build_transforms(args.mode) if args.mode == 'Mask2CAD' else None)
     object_rotation_quat = train_dataset_with_views.clustered_rotations
     
-    val_dataset = datasets.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
+    val_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
     val_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_dataset)
     
     evaluator_detection = coco_eval.CocoEvaluator(val_dataset.as_coco_dataset(), ['bbox', 'segm'])
