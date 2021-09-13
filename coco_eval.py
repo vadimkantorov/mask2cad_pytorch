@@ -33,15 +33,23 @@ class CocoEvaluator(object):
     def synchronize_between_processes(self):
         for iou_type, coco_eval in self.coco_eval.items():
             self.eval_imgs[iou_type] = np.concatenate(self.eval_imgs[iou_type], 2)
-            self.merge_coco_eval(coco_eval, self.img_ids, self.eval_imgs[iou_type])
+            
+            all_img_ids = utils.all_gather(self.img_ids)
+            all_eval_imgs = utils.all_gather(self.eval_imgs[iou_type])
 
-    def accumulate(self):
-        for coco_eval in self.coco_eval.values():
-            coco_eval.accumulate()
+            merged_img_ids = np.array([s for p in all_img_ids for s in p])
+            merged_img_ids, idx = np.unique(merged_img_ids, return_index=True)
+            merged_eval_imgs = np.concatenate(all_eval_imgs, 2)
+            merged_eval_imgs = merged_eval_imgs[..., idx]
 
-    def summarize(self):
+            coco_eval.evalImgs = list(merged_eval_imgs.flatten())
+            coco_eval.params.imgIds = list(merged_img_ids)
+            coco_eval._paramsEval = copy.deepcopy(coco_eval.params)
+
+    def evaluate(self):
         for iou_type, coco_eval in self.coco_eval.items():
             print("IoU metric:", iou_type)
+            coco_eval.accumulate()
             coco_eval.summarize()
 
     def prepare(self, predictions, iou_type):
@@ -102,18 +110,3 @@ class CocoEvaluator(object):
     def xyxy_to_xywh(boxes):
         xmin, ymin, xmax, ymax = boxes.unbind(dim=-1)
         return torch.stack((xmin, ymin, xmax - xmin, ymax - ymin), dim=-1)
-
-    @staticmethod
-    def merge_coco_eval(coco_eval, img_ids, eval_imgs):
-        all_img_ids = utils.all_gather(img_ids)
-        all_eval_imgs = utils.all_gather(eval_imgs)
-
-        merged_img_ids = np.array([s for p in all_img_ids for s in p])
-        merged_eval_imgs = np.concatenate([s for p in all_eval_imgs for s in p], 2)
-
-        merged_img_ids, idx = np.unique(merged_img_ids, return_index=True)
-        merged_eval_imgs = merged_eval_imgs[..., idx]
-
-        coco_eval.evalImgs = list(merged_eval_imgs.flatten())
-        coco_eval.params.imgIds = list(merged_img_ids)
-        coco_eval._paramsEval = copy.deepcopy(coco_eval.params)

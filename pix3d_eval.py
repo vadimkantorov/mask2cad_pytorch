@@ -17,10 +17,14 @@ class Pix3dEvaluator(dict):
         self.mesh_cache = None
     
     def update(self, predictions):
-        predictions = { image_id : dict(image_id = image_id, instances = dict(pred['instances'], pred_masks_rle = [dict(rle, counts = rle['counts'].decode('utf-8')) for mask in pred_masks for rle in [pycocotools.mask.encode(np.array(mask[:, :, None], order='F', dtype='uint8'))[0]]]    )) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
-        super().update(predictions)
+        preds = { image_id : dict(image_id = image_id, instances = dict(pred['instances'], pred_masks_rle = [dict(rle, counts = rle['counts'].decode('utf-8')) for mask in pred_masks for rle in [pycocotools.mask.encode(np.array(mask[:, :, None], order='F', dtype='uint8'))[0]]]    )) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
+        super().update(preds)
+
+    def synchronize_between_processes(self):
+        for preds in utils.all_gather(self):
+            super().update(preds)
     
-    def summarize(self, iou_thresh = 0.5):
+    def evaluate(self, iou_thresh = 0.5):
         if not self.mesh_cache:
              self.mesh_cache = {model_path : (mesh[0], mesh[1].verts_idx) for model_path in self.dataset.shape_idx for mesh in [pytorch3d.io.load_obj(os.path.join(self.dataset.root, model_path), load_textures = False)]}
 
