@@ -71,11 +71,6 @@ class RandomPhotometricDistort(nn.Module):
             channels = Fv.get_image_num_channels(image)
             permutation = torch.randperm(channels)
 
-            is_pil = Fv._is_pil_image(image)
-            if is_pil:
-                image = Fv.to_tensor(image)
             image = image[..., permutation, :, :]
-            if is_pil:
-                image = Fv.to_pil_image(image)
 
         return image, target
