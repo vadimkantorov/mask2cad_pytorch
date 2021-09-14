@@ -2,9 +2,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import os
 
-import numpy as np
 import pycocotools.mask
-from PIL import Image
 
 import torch
 import torch.nn.functional as F
@@ -15,9 +13,13 @@ class Pix3dEvaluator(dict):
     def __init__(self, dataset):
         self.dataset = dataset
         self.mesh_cache = None
+        sefl.cocoapi = dataset.as_coco_dataset()
+        self.npos = dataset.num_by_category
+        self.image_root = self.dataset.root
+        self.categories = self.dataset.categories
     
     def update(self, predictions):
-        preds = { image_id : dict(image_id = image_id, instances = dict(pred['instances'], pred_masks_rle = [dict(rle, counts = rle['counts'].decode('utf-8')) for mask in pred_masks for rle in [pycocotools.mask.encode(np.array(mask[:, :, None], order='F', dtype='uint8'))[0]]]    )) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
+        preds = { image_id : dict(image_id = image_id, instances = dict(pred['instances'], pred_masks_rle = [ rle for mask in pred_masks for rle in [ pycocotools.mask.encode(mask.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy())[0] ] ]    )) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
         super().update(preds)
 
     def synchronize_between_processes(self):
@@ -28,10 +30,10 @@ class Pix3dEvaluator(dict):
         if not self.mesh_cache:
              self.mesh_cache = {model_path : (mesh[0], mesh[1].verts_idx) for model_path in self.dataset.shape_idx for mesh in [pytorch3d.io.load_obj(os.path.join(self.dataset.root, model_path), load_textures = False)]}
 
-        pix3d_metrics = evaluate_for_pix3d(list(self.values()), npos = self.dataset.num_by_category, thing_dataset_id_to_contiguous_id = {k : k for k in range(len(self.dataset.categories))}, cocoapi = self.dataset, image_root = self.dataset.root, mesh_models = self.mesh_cache, iou_thresh = iou_thresh)
-        print("Box  AP %.5f" % (pix3d_metrics["box_ap@%.1f"  % iou_thresh]))
-        print("Mask AP %.5f" % (pix3d_metrics["mask_ap@%.1f" % iou_thresh]))
-        print("Mesh AP %.5f" % (pix3d_metrics["mesh_ap@%.1f" % iou_thresh]))
+        pix3d_metrics = evaluate_for_pix3d(list(self.values()), npos = self.npos, cocoapi = self.cocoapi, image_root = self.image_root, mesh_models = self.mesh_cache, iou_thresh = iou_thresh, thing_dataset_id_to_contiguous_id = {k : k for k in range(len(self.categories))})
+        print("Box  AP {:.5f}".forrmat(pix3d_metrics["box_ap@{:.1f}".format(iou_thresh)]))
+        print("Mask AP {:.5f}".format(pix3d_metrics["mask_ap@{:.1f}".format(iou_thresh)]))
+        print("Mesh AP {:.5f}".format(pix3d_metrics["mesh_ap@{:.1f}".format(iou_thresh)]))
         return pix3d_metrics
 
 
@@ -112,13 +114,7 @@ def evaluate_for_pix3d(
         assert gt_anns["image_id"] == original_id
 
         # get original ground truth mask, box, label & mesh
-        maskfile = os.path.join(image_root, gt_anns["segmentation"])
-        with open(maskfile, "rb") as f:
-            gt_mask = torch.as_tensor(np.asarray(Image.open(f), dtype=np.float32) / 255.0)
-        assert gt_mask.shape[0] == image_height and gt_mask.shape[1] == image_width
-
-        gt_mask = (gt_mask > 0).to(dtype=torch.uint8)  # binarize mask
-        gt_mask_rle = [pycocotools.mask.encode(np.array(gt_mask[:, :, None], order="F"))[0]]
+        gt_mask_rle = gt_anns["segmentation"]
         gt_box = torch.as_tensor(gt_anns["bbox"]).reshape(-1, 4)  # xywh from coco
         gt_box = BoxMode_convert_BoxMode_XYWH_ABS__BoxMode_XYXY_ABS(gt_box)
         gt_label = gt_anns["category_id"]
@@ -129,7 +125,7 @@ def evaluate_for_pix3d(
         gt_t = torch.as_tensor(gt_anns["trans_mat"], device = device)
         gt_K = torch.as_tensor(gt_anns["K"], device = device)
         assert mesh_models is not None
-        modeltype = gt_anns["model"]
+        modeltype = gt_anns["shape_path"]
         gt_verts, gt_faces = (
             mesh_models[modeltype][0].clone(),
             mesh_models[modeltype][1].clone(),
