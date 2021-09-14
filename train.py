@@ -129,16 +129,14 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
         print('Detection', evaluator_detection.evaluate())
         print('Mesh', evaluator_mesh.evaluate()) #TODO: average by category
 
-def build_transforms(mode):
-    return transforms.DetectionPresetTrain(data_augmentation)
-
 def main(args):
     os.makedirs(args.output_path, exist_ok = True)
     utils.init_distributed_mode(args)
 
-    train_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.train_metadata_path, transforms = build_transforms(args.mode) if args.mode == 'MaskRCNN' else None)
+    train_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.train_metadata_path, transforms = transforms.MaskRCNNAugmentations() if args.mode == 'MaskRCNN' else None)
     aspect_ratios, num_categories = train_dataset.aspect_ratios, len(train_dataset.categories)
-    train_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset, transforms = build_transforms(args.mode) if args.mode == 'Mask2CAD' else None)
+    train_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset, transforms = transforms.Mask2CADAugmentations() if args.mode == 'Mask2CAD' else None)
+    # TODO: unify naming
     object_rotation_quat = train_dataset_with_views.clustered_rotations
     
     val_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
@@ -231,8 +229,8 @@ if __name__ == '__main__':
     parser.add_argument('--dist-url', default='env://', help='url used to set up distributed training')
     
     parser.add_argument('--dataset-root', default = 'data/common/pix3d')
-    parser.add_argument('--train-metadata-path', default = 'data/common/pix3d_splits/pix3d_s1_train.json')
-    parser.add_argument('--val-metadata-path', default = 'data/common/pix3d_splits/pix3d_s1_test.json')
+    parser.add_argument('--train-metadata-path', default = 'data/common/pix3d_splits/pix3d_s2_train.json')
+    parser.add_argument('--val-metadata-path', default = 'data/common/pix3d_splits/pix3d_s2_test.json')
     
     parser.add_argument('--model', default='maskrcnn_resnet50_fpn')
     parser.add_argument('--device', default='cpu', help='device')

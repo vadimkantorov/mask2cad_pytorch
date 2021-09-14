@@ -7,6 +7,28 @@ import torch.nn.functional as F
 import torchvision
     
 
+class RenderedViews(torchvision.datasets.VisionDataset):
+    def __init__(self, root, clustered_rotations_path, dataset, transforms = None, ext = '.jpg'):
+        super().__init__(root = root, transforms = transforms)
+        self.dataset = dataset
+        self.ext = ext
+        self.clustered_rotations = torch.tensor(list(map(json.load(open(clustered_rotations_path)).get, dataset.categories)), dtype = torch.float32)
+
+    def __getitem__(self, idx):
+        images, targets = self.dataset[idx[0]]
+        view_dir = os.path.join(self.root, targets['shape_path'])
+
+        or_jpg = lambda path, ext = '.png': torchvision.io.read_image(path if os.path.exists(path) else path.replace(ext, '.jpg'))
+        no_img = lambda idx: [k for k in idx if k > 0]
+        # TODO: rerender to eliminate fixup
+        fixup = lambda path: path if os.path.exists(path) else os.path.join(os.path.dirname(os.path.dirname(path)), 'model.obj', os.path.basename(path))
+        
+        views = torch.stack([or_jpg(os.path.join(self.root, targets['image_id']) if k == 0 else fixup(os.path.join(view_dir, f'{k:04}' + self.ext))) for k in no_img(idx[1:])])
+
+        targets['shape_views'] = views.expand(-1, 3, -1, -1) / 255.0
+
+        return img, targets 
+
 class RenderedViewsSequentialSampler(torch.utils.data.Sampler):
     def __init__(self, num_examples, num_rendered_views):
         self.num_examples = num_examples
@@ -54,24 +76,6 @@ class UniqueShapeRenderedViewsSequentialSampler(torch.utils.data.Sampler):
 
     def __len__(self):
         return len(self.idx)
-
-class RenderedViews(torchvision.datasets.VisionDataset):
-    def __init__(self, root, clustered_rotations_path, dataset, transforms = None, ext = '.jpg'):
-        super().__init__(root = root, transforms = transforms)
-        self.dataset = dataset
-        self.ext = ext
-        self.clustered_rotations = torch.tensor(list(map(json.load(open(clustered_rotations_path)).get, dataset.categories)), dtype = torch.float32)
-
-    def __getitem__(self, idx):
-        img, extra = self.dataset[idx[0]]
-        view_dir = os.path.join(self.root, extra['shape_path'])
-        or_jpg = lambda path, ext = '.png': torchvision.io.read_image(path if os.path.exists(path) else path.replace(ext, '.jpg'))
-        no_img = lambda idx: [k for k in idx if k > 0]
-        fixup = lambda path: path if os.path.exists(path) else os.path.join(os.path.dirname(os.path.dirname(path)), 'model.obj', os.path.basename(path))
-        
-        views = torch.stack([or_jpg(os.path.join(self.root, extra['image_id']) if k == 0 else fixup(os.path.join(view_dir, f'{k:04}' + self.ext))) for k in no_img(idx[1:])])
-
-        return img, extra, views.expand(-1, 3, -1, -1) / 255.0
 
     def __len__(self):
         return len(self.dataset)

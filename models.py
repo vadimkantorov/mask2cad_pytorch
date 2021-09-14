@@ -10,7 +10,7 @@ import quat
 class ShapeRetrieval(nn.Module):
     def __init__(self, data_loader, rendered_view_encoder):
         super().__init__()
-        self.shape_embedding, self.shape_idx, self.shape_path = zip(*[(rendered_view_encoder(targets['views'].flatten(end_dim = -4)), targets['shape_idx'].repeat(1, targets['views'].shape[-4]).flatten(), [pp for p in targets['shape_path'] for pp in [p] * targets['views'].shape[-4] ]  ) for img, targets in data_loader])
+        self.shape_embedding, self.shape_idx, self.shape_path = zip(*[(rendered_view_encoder(targets['shape_views'].flatten(end_dim = -4)), targets['shape_idx'].repeat(1, targets['shape_views'].shape[-4]).flatten(), [pp for p in targets['shape_path'] for pp in [p] * targets['shape_views'].shape[-4] ]  ) for img, targets in data_loader])
         self.shape_embedding, self.shape_idx, self.shape_path = F.normalize(torch.cat(self.shape_embedding), dim = -1), torch.cat(self.shape_idx), [s for b in self.shape_path for s in b]
     
     def forward(self, shape_embedding, K = 10):
