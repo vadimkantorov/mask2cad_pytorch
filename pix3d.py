@@ -40,19 +40,18 @@ class Pix3d(torchvision.datasets.VisionDataset):
         width, heght = m['img_size']
         bbox = m['bbox']
         
-        image = torchvision.io.read_image(os.path.join(self.root, m['img'])) if read_image else torch.empty((0, height, width), dtype = torch.uint8)
-        mask = torchvision.io.read_image(os.path.join(self.root, m['mask'])) if read_mask else torch.empty((0, height, width), dtype = torch.uint8)
+        image = (torchvision.io.read_image(os.path.join(self.root, m['img'])) / 255.0) if read_image else torch.empty((0, height, width), dtype = torch.uint8)
+        mask = (torchvision.io.read_image(os.path.join(self.root, m['mask'])) == 255) if read_mask else  torch.empty((0, height, width), dtype = torch.uint8)
         
         bbox = torch.as_tensor(bbox, dtype = torch.int16).unsqueeze(0)
         area = (bbox[..., 2] - bbox[..., 0]) * (bbox[..., 3] - bbox[..., 1])
         iscrowd = torch.zeros(len(bbox), dtype = torch.uint8)
         labels = 1 + torch.tensor(self.category_idx[m['category']]).unsqueeze(0)
-        masks = (mask == 255).unsqueeze(0)
+        masks = mask.unsqueeze(0)
         object_location = torch.as_tensor(m['trans_mat'], dtype = torch.float64).unsqueeze(0)
         object_rotation = torch.as_tensor(m['rot_mat'  ], dtype = torch.float64).unsqueeze(0)
         shape_idx = torch.tensor(self.shape_idx[m['model']]).unsqueeze(0)
 
-        image = image / 255.0
         target = dict(
             image_id   = m['img'],
             shape_path = m['model'],
