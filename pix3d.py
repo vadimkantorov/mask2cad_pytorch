@@ -1,6 +1,7 @@
 import os
 import json
 import collections
+import itertools
 import torchvision
 
 import pycocotools.coco, pycocotools.mask    
@@ -9,16 +10,9 @@ class Pix3d(torchvision.datasets.VisionDataset):
     categories           = ['background', 'bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
     categories_coco_inds = [0,            65   , -1        , 63      , -1   , -1    ,  63   , 67     , -1    ,  -1       ]
 
-    def __init__(self, root, split_path = None, max_image_size = None, drop_images = ('img/table/1749.jpg', 'img/table/0045.png'), read_image = True, read_mask = True, transforms = None, **kwargs):
+    def __init__(self, root, split_path = None, max_image_size = None, drop_images = ('img/table/1749.jpg', 'img/table/0045.png'), transforms = None, **kwargs):
         super().__init__(root = root, transforms = transforms, **kwargs)
         metadata_full = json.load(open(os.path.join(root, 'pix3d.json')))
-        assert set(collections.Counter(m['img'] for m in metadata_full).values()) == {1}
-        # TODO: assert shape2category is many-to-one
-        
-        self.shapes = sorted(set(m['model'] for m in metadata_full))
-        self.shape_idx = {t        : i for i, t in enumerate(self.shapes)}
-        self.category_idx = {category : i for i, category in enumerate(self.categories)}
-
         if split_path:
             split = json.load(open(split_path))
             images = {i['id'] : dict(img = i['file_name'], img_size = [i['width'], i['height']]) for i in split['images']}
@@ -26,34 +20,39 @@ class Pix3d(torchvision.datasets.VisionDataset):
         else:
             self.metadata = metadata_full
 
+        key_model = lambda m: m['model']
+        assert set(collections.Counter(m['img'] for m in metadata_full).values()) == {1}
+        assert all(len(set(m['category'] for m in g)) == 1 for k, g in itertools.groupby(sorted(metadata_full, key = key_model), key = key_model)
         assert all(m['bbox'][0] <= m['bbox'][2] and m['bbox'][1] <= m['bbox'][3] for m in self.metadata)
 
         drop_image_size = max_image_size and sum(max_image_size)
-
         self.metadata = [m for m in self.metadata if (m['img'] not in drop_images) and (not drop_image_size or (m['img_size'][0] <= max_image_size[0] and m['img_size'][1] <= max_image_size[1]))] 
 
+        self.shapes_path = sorted(set(m['model'] for m in metadata_full))
+        self.shape_idx =   {t         : i for i, t        in enumerate(self.shape_path)}
+        self.category_idx = {category : i for i, category in enumerate(self.categories)}
         self.image_idx = {m['img'] : dict(m = m, file_name = m['img'], width = m['img_size'][0], height = m['img_size'][1]) for i, m in enumerate(self.metadata)}
         self.num_by_category = collections.Counter(self.category_idx[m['category']] for m in self.metadata)
-        self.aspect_ratios = torch.tensor([m['img_size'][0] / m['img_size'][1] for m in self.metadata], dtype = torch.float32)
+        self.aspect_ratios = torch.tensor([width / height for m in self.metadata for width, height in [m['img_size']]], dtype = torch.float32)
 
     def __getitem__(self, idx, read_image = True, read_mask = True):
         m = self.metadata[idx]
-        img_size = m['img_size']
+        width, heght = m['img_size']
         bbox = m['bbox']
         
-        img = torchvision.io.read_image(os.path.join(self.root, m['img'])) if read_image else torch.empty((0, img_size[1], img_size[0]), dtype = torch.uint8)
-        mask = torchvision.io.read_image(os.path.join(self.root, m['mask'])) if read_mask else torch.empty((0, img_size[1], img_size[0]), dtype = torch.uint8)
+        image = torchvision.io.read_image(os.path.join(self.root, m['img'])) if read_image else torch.empty((0, height, width), dtype = torch.uint8)
+        mask = torchvision.io.read_image(os.path.join(self.root, m['mask'])) if read_mask else torch.empty((0, height, width), dtype = torch.uint8)
         
-        bbox = torch.tensor(bbox).unsqueeze(0)
+        bbox = torch.as_tensor(bbox, dtype = torch.int16).unsqueeze(0)
         area = (bbox[..., 2] - bbox[..., 0]) * (bbox[..., 3] - bbox[..., 1])
         iscrowd = torch.zeros(len(bbox), dtype = torch.uint8)
         labels = 1 + torch.tensor(self.category_idx[m['category']]).unsqueeze(0)
         masks = (mask == 255).unsqueeze(0)
         object_location = torch.as_tensor(m['trans_mat'], dtype = torch.float64).unsqueeze(0)
-        object_rotation = torch.as_tensor(m['rot_mat'], dtype = torch.float64).unsqueeze(0)
+        object_rotation = torch.as_tensor(m['rot_mat'  ], dtype = torch.float64).unsqueeze(0)
         shape_idx = torch.tensor(self.shape_idx[m['model']]).unsqueeze(0)
 
-        img = img / 255.0
+        image = image / 255.0
         target = dict(
             image_id   = m['img'],
             shape_path = m['model'],
@@ -66,16 +65,16 @@ class Pix3d(torchvision.datasets.VisionDataset):
             labels = labels,
             masks = masks, 
 
-            image_width_height = img_size,
+            image_width_height = (width, height),
             shape_idx = shape_idx,
             object_location = object_location,
             object_rotation = object_rotation
         )
         
         if self.transforms:
-            img, target = self.transforms(img, target)
+            image, target = self.transforms(image, target)
 
-        return img, target
+        return image, target
 
     def __len__(self):
         return len(self.metadata)
@@ -85,9 +84,7 @@ class Pix3d(torchvision.datasets.VisionDataset):
         coco_dataset = pycocotools.coco.COCO()
         coco_dataset.dataset = dict(
             images = [dict(id = m['img'], height = m['img_size'][1], width = m['img_size'][0]) for m in self.metadata], 
-            
             categories = [dict(id = category_idx, name = category) for category_idx, category in enumerate(self.categories) if category_idx >= 1], 
-            
             annotations = [dict(
                 id = 1 + image_idx, 
                 image_id = m['img'],
@@ -103,7 +100,7 @@ class Pix3d(torchvision.datasets.VisionDataset):
 
                 shape_path = m['model']
 
-                ) for image_idx, m in enumerate(self.metadata)]
+            ) for image_idx, m in enumerate(self.metadata)]
         )
         coco_dataset.createIndex()
         return coco_dataset
