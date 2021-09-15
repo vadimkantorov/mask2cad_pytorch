@@ -8,14 +8,14 @@ import torchvision
     
 
 class RenderedViews(torchvision.datasets.VisionDataset):
-    def __init__(self, root, clustered_rotations_path, dataset, transforms = None, ext = '.jpg'):
+    def __init__(self, root, object_rotation_quat_path, dataset, transforms = None, ext = '.jpg'):
         super().__init__(root = root, transforms = transforms)
         self.dataset = dataset
         self.ext = ext
-        self.clustered_rotations = torch.tensor(list(map(json.load(open(clustered_rotations_path)).get, dataset.categories)), dtype = torch.float32)
+        self.object_rotation_quat = torch.tensor(list(map(json.load(open(object_rotation_quat_path)).get, dataset.categories)), dtype = torch.float32)
 
     def __getitem__(self, idx):
-        images, targets = self.dataset[idx[0]]
+        images, targets = self.dataset.__getitem__(idx[0], read_image = False, read_mask = False) 
         view_dir = os.path.join(self.root, targets['shape_path'])
 
         or_jpg = lambda path, ext = '.png': torchvision.io.read_image(path if os.path.exists(path) else path.replace(ext, '.jpg'))
@@ -27,7 +27,7 @@ class RenderedViews(torchvision.datasets.VisionDataset):
 
         targets['shape_views'] = views.expand(-1, 3, -1, -1) / 255.0
 
-        return img, targets 
+        return images, targets 
 
 class RenderedViewsSequentialSampler(torch.utils.data.Sampler):
     def __init__(self, num_examples, num_rendered_views):

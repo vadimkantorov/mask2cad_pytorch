@@ -5,6 +5,13 @@ import torch.nn as nn
 import torchvision.transforms.functional as Fv
 import torchvision.transforms.transforms as T
 
+#scale_factor = min(self.target_image_size[0] / img.shape[-1], self.target_image_size[1] / img.shape[-2])
+#img = F.interpolate(img.unsqueeze(0), self.target_image_size).squeeze(0) if img.numel() > 0 else torch.empty((0, self.target_image_size[1], self.target_image_size[0]), dtype = torch.uint8)
+#mask = F.interpolate(mask.unsqueeze(0), self.target_image_size).squeeze(0) if mask.numel() > 0 else torch.empty((0, self.target_image_size[1], self.target_image_size[0]), dtype = torch.uint8)
+##img = F.interpolate(img.unsqueeze(0), scale_factor = scale_factor).squeeze(0)
+##mask = F.interpolate(img.unsqueeze(0), scale_factor = scale_factor).squeeze(0)
+#bbox = [bbox[0] * scale_factor, bbox[1] * scale_factor, bbox[2] * scale_factor, bbox[3] * scale_factor]
+
 def MaskRCNNAugmentations(hflip_prob = 0.5)
     # TODO: add rescale?
     return RandomHorizontalFlip(p = hflip_prob)

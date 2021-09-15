@@ -135,12 +135,12 @@ def main(args):
 
     train_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.train_metadata_path, transforms = transforms.MaskRCNNAugmentations() if args.mode == 'MaskRCNN' else None)
     aspect_ratios, num_categories = train_dataset.aspect_ratios, len(train_dataset.categories)
-    train_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, train_dataset, transforms = transforms.Mask2CADAugmentations() if args.mode == 'Mask2CAD' else None)
+    train_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_object_rotation_quat, train_dataset, transforms = transforms.Mask2CADAugmentations() if args.mode == 'Mask2CAD' else None)
     # TODO: unify naming
-    object_rotation_quat = train_dataset_with_views.clustered_rotations
+    object_rotation_quat = train_dataset_with_views.object_rotation_quat
     
     val_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
-    val_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_clustered_rotations, val_dataset)
+    val_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_object_rotation_quat, val_dataset)
     
     evaluator_detection = coco_eval.CocoEvaluator(val_dataset.as_coco_dataset(), ['bbox', 'segm'])
     evaluator_mesh = pix3d_eval.Pix3dEvaluator(val_dataset)
@@ -261,11 +261,10 @@ if __name__ == '__main__':
     parser.add_argument('--loss-weights', default = dict(shape_embedding = 0.5, pose_classification = 0.25, pose_regression = 5.0, center_regression = 5.0), action = type('', (argparse.Action, ), dict(__call__ = lambda a, p, n, v, o: getattr(n, a.dest).update({k : float(v) for k, v in [v.split('=')]})))) 
     
     parser.add_argument('--dataset-rendered-views-root', default = 'data/pix3d_renders')
-    parser.add_argument('--dataset-clustered-rotations', default = 'pix3d_clustered_viewpoints.json')
+    parser.add_argument('--dataset-object-rotation-quat', default = 'pix3d_clustered_viewpoints.json')
     parser.add_argument('--num-rendered-views', type = int, default = 16)
     parser.add_argument('--num-sampled-views', type = int, default = 3)
     parser.add_argument('--num-sampled-boxes', type = int, default = 8)
-    
 
     args = parser.parse_args()
     

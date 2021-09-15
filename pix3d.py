@@ -9,15 +9,11 @@ class Pix3d(torchvision.datasets.VisionDataset):
     categories           = ['background', 'bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
     categories_coco_inds = [0,            65   , -1        , 63      , -1   , -1    ,  63   , 67     , -1    ,  -1       ]
 
-    def __init__(self, root, split_path = None, max_image_size = None, target_image_size = (320, 240), drop_images = ['img/table/1749.jpg', 'img/table/0045.png'], read_image = True, read_mask = True, transforms = None, **kwargs):
+    def __init__(self, root, split_path = None, max_image_size = None, drop_images = ('img/table/1749.jpg', 'img/table/0045.png'), read_image = True, read_mask = True, transforms = None, **kwargs):
         super().__init__(root = root, transforms = transforms, **kwargs)
-        self.target_image_size = target_image_size
-        self.read_image = read_image
-        self.read_mask = read_mask
-        self.transforms = transforms
         metadata_full = json.load(open(os.path.join(root, 'pix3d.json')))
-        
         assert set(collections.Counter(m['img'] for m in metadata_full).values()) == {1}
+        # TODO: assert shape2category is many-to-one
         
         self.shapes = sorted(set(m['model'] for m in metadata_full))
         self.shape_idx = {t        : i for i, t in enumerate(self.shapes)}
@@ -33,29 +29,20 @@ class Pix3d(torchvision.datasets.VisionDataset):
         assert all(m['bbox'][0] <= m['bbox'][2] and m['bbox'][1] <= m['bbox'][3] for m in self.metadata)
 
         drop_image_size = max_image_size and sum(max_image_size)
+
         self.metadata = [m for m in self.metadata if (m['img'] not in drop_images) and (not drop_image_size or (m['img_size'][0] <= max_image_size[0] and m['img_size'][1] <= max_image_size[1]))] 
 
         self.image_idx = {m['img'] : dict(m = m, file_name = m['img'], width = m['img_size'][0], height = m['img_size'][1]) for i, m in enumerate(self.metadata)}
         self.num_by_category = collections.Counter(self.category_idx[m['category']] for m in self.metadata)
-        self.width_min_max  = (min(m['img_size'][0] for m in self.metadata), max(m['img_size'][0] for m in self.metadata))
-        self.height_min_max = (min(m['img_size'][1] for m in self.metadata), max(m['img_size'][1] for m in self.metadata))
         self.aspect_ratios = torch.tensor([m['img_size'][0] / m['img_size'][1] for m in self.metadata], dtype = torch.float32)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx, read_image = True, read_mask = True):
         m = self.metadata[idx]
         img_size = m['img_size']
         bbox = m['bbox']
         
-        img = torchvision.io.read_image(os.path.join(self.root, m['img'])) if self.read_image else torch.empty((0, img_size[1], img_size[0]), dtype = torch.uint8)
-        mask = torchvision.io.read_image(os.path.join(self.root, m['mask'])) if self.read_mask else torch.empty((0, img_size[1], img_size[0]), dtype = torch.uint8)
-
-        if self.target_image_size and sum(self.target_image_size):
-            scale_factor = min(self.target_image_size[0] / img.shape[-1], self.target_image_size[1] / img.shape[-2])
-            img = F.interpolate(img.unsqueeze(0), self.target_image_size).squeeze(0) if img.numel() > 0 else torch.empty((0, self.target_image_size[1], self.target_image_size[0]), dtype = torch.uint8)
-            mask = F.interpolate(mask.unsqueeze(0), self.target_image_size).squeeze(0) if mask.numel() > 0 else torch.empty((0, self.target_image_size[1], self.target_image_size[0]), dtype = torch.uint8)
-            #img = F.interpolate(img.unsqueeze(0), scale_factor = scale_factor).squeeze(0)
-            #mask = F.interpolate(img.unsqueeze(0), scale_factor = scale_factor).squeeze(0)
-            bbox = [bbox[0] * scale_factor, bbox[1] * scale_factor, bbox[2] * scale_factor, bbox[3] * scale_factor]
+        img = torchvision.io.read_image(os.path.join(self.root, m['img'])) if read_image else torch.empty((0, img_size[1], img_size[0]), dtype = torch.uint8)
+        mask = torchvision.io.read_image(os.path.join(self.root, m['mask'])) if read_mask else torch.empty((0, img_size[1], img_size[0]), dtype = torch.uint8)
         
         bbox = torch.tensor(bbox).unsqueeze(0)
         area = (bbox[..., 2] - bbox[..., 0]) * (bbox[..., 3] - bbox[..., 1])
@@ -68,10 +55,10 @@ class Pix3d(torchvision.datasets.VisionDataset):
 
         img = img / 255.0
         target = dict(
-            image_id = m['img'],
+            image_id   = m['img'],
             shape_path = m['model'],
-            mask_path = m['mask'],
-            category = m['category'], 
+            mask_path  = m['mask'],
+            category   = m['category'], 
             
             boxes = bbox,
             area = area,
