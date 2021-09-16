@@ -80,26 +80,32 @@ class UniqueShapeRenderedViewsSequentialSampler(torch.utils.data.Sampler):
     def __len__(self):
         return len(self.dataset)
     
-
+def stack_jagged(tensors, fill_value = 0):
+    shape = [len(tensors)] + [max(t.shape[dim] for t in tensors) for dim in range(len(tensors[0].shape))]
+    res = torch.full(shape, fill_value, dtype = tensors[0].dtype, device = tensors[0].device)
+    for u, t in zip(res, tensors):
+        u[tuple(map(slice, t.shape))] = t
+    return u
 
 def collate_fn(batch):
     assert batch
 
-    images = torch.stack([b[0] for b in batch])
+    images = stack_jagged([b[0] for b in batch])
     
     targets = dict(
-        image_id = [b[1]['image_id'] for b in batch], 
-        shape_path = [b[1]['shape_path'] for b in batch], 
-        mask_path = [b[1]['mask_path'] for b in batch], 
-        category = [b[1]['category'] for b in batch],
+        image_id        = [b[1]['image_id']                     for b in batch], 
+        shape_path      = [b[1]['shape_path']                   for b in batch], 
+        mask_path       = [b[1]['mask_path']                    for b in batch], 
+        category        = [b[1]['category']                     for b in batch],
 
-        boxes = torch.stack([b[1]['boxes'] for b in batch]),
-        masks = torch.stack([b[1]['masks'] for b in batch]), 
-        shape_idx = torch.stack([b[1]['shape_idx'] for b in batch]), 
-        labels = torch.stack([b[1]['labels'] for b in batch]), 
-        object_location = torch.stack([b[1]['object_location'] for b in batch]),
-        object_rotation = torch.stack([b[1]['object_rotation'] for b in batch]),
-        views = torch.stack([b[2] for b in batch]) if len(batch[0]) > 2 else None
+        num_boxes       = torch.tensor([len(b[1]['boxes']       for b in batch]),
+        boxes           = stack_jagged([b[1]['boxes']           for b in batch]),
+        masks           = stack_jagged([b[1]['masks']           for b in batch]), 
+        shape_idx       = stack_jagged([b[1]['shape_idx']       for b in batch]), 
+        labels          = stack_jagged([b[1]['labels']          for b in batch]), 
+        object_location = stack_jagged([b[1]['object_location'] for b in batch]),
+        object_rotation = stack_jagged([b[1]['object_rotation'] for b in batch]),
+        views           = stack_jagged([b[2] for b in batch]) if len(batch[0]) > 2 else None,
     )
    
     return images, targets

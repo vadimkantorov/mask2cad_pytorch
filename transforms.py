@@ -3,7 +3,6 @@ import torch
 import torchvision
 
 import torch.nn as nn
-import torchvision.transforms.functional as Fv
 import torchvision.transforms.transforms as T
 
 #scale_factor = min(self.target_image_size[0] / img.shape[-1], self.target_image_size[1] / img.shape[-2])
@@ -15,8 +14,8 @@ import torchvision.transforms.transforms as T
 
 class MaskRCNNAugmentations(nn.Module):
     # https://detectron2.readthedocs.io/en/latest/modules/config.html#yaml-config-references
-    # _C.INPUT.MIN_SIZE_TRAIN = (800,)
-    def __init__(self, p = 0.5, short_edge_length = (640, 672, 704, 736, 768, 800), max_size = 1333):
+    # _C.INPUT.MIN_SIZE_TRAIN = (640, 672, 704, 736, 768, 800)
+    def __init__(self, p = 0.5, short_edge_length = (800,), max_size = 1333):
         super().__init__()
         # https://github.com/facebookresearch/detectron2/blob/main/configs/common/data/coco.py
 		self.transforms = [ResizeShortestEdge(short_edge_length = short_edge_length, max_size = max_size), RandomHorizontalFlip(p = p)]
@@ -75,9 +74,9 @@ class ResizeShortestEdge(nn.Module):
 class RandomHorizontalFlip(T.RandomHorizontalFlip):
     def forward(self, image, target):
         if torch.rand(1) < self.p:
-            image = Fv.hflip(image)
+            image = image.flip(-1)
             if target is not None:
-                width, _ = Fv.get_image_size(image)
+                width = image.shape[-1]
                 target["boxes"][:, [0, 2]] = width - target["boxes"][:, [2, 0]]
                 if "masks" in target:
                     target["masks"] = target["masks"].flip(-1)
@@ -121,7 +120,7 @@ class RandomPhotometricDistort(nn.Module):
                 image = self._contrast(image)
 
         if r[6] < self.p:
-            channels = Fv.get_image_num_channels(image)
+            channels = image.shape[-3]
             permutation = torch.randperm(channels)
 
             image = image[..., permutation, :, :]
