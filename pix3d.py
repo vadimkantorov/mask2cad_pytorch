@@ -20,16 +20,15 @@ class Pix3d(torchvision.datasets.VisionDataset):
         else:
             self.metadata = metadata_full
 
-        key_model = lambda m: m['model']
         assert set(collections.Counter(m['img'] for m in metadata_full).values()) == {1}
-        assert all(len(set(m['category'] for m in g)) == 1 for k, g in itertools.groupby(sorted(metadata_full, key = key_model), key = key_model)
+        assert all(len(set(m['category'] for m in g)) == 1 for k, g in itertools.groupby(sorted(metadata_full, key = lambda m: m['model']), key = lambda m: m['model'])
         assert all(m['bbox'][0] <= m['bbox'][2] and m['bbox'][1] <= m['bbox'][3] for m in self.metadata)
 
         drop_image_size = max_image_size and sum(max_image_size)
         self.metadata = [m for m in self.metadata if (m['img'] not in drop_images) and (not drop_image_size or (m['img_size'][0] <= max_image_size[0] and m['img_size'][1] <= max_image_size[1]))] 
 
         self.shapes_path = sorted(set(m['model'] for m in metadata_full))
-        self.shape_idx =   {t         : i for i, t        in enumerate(self.shape_path)}
+        self.shape_idx    = {t        : i for i, t        in enumerate(self.shape_path)}
         self.category_idx = {category : i for i, category in enumerate(self.categories)}
         self.image_idx = {m['img'] : dict(m = m, file_name = m['img'], width = m['img_size'][0], height = m['img_size'][1]) for i, m in enumerate(self.metadata)}
         self.num_by_category = collections.Counter(self.category_idx[m['category']] for m in self.metadata)
@@ -41,7 +40,7 @@ class Pix3d(torchvision.datasets.VisionDataset):
         bbox = m['bbox']
         
         image = (torchvision.io.read_image(os.path.join(self.root, m['img'])) / 255.0) if read_image else torch.empty((0, height, width), dtype = torch.uint8)
-        mask = (torchvision.io.read_image(os.path.join(self.root, m['mask'])) == 255) if read_mask else  torch.empty((0, height, width), dtype = torch.uint8)
+        mask = (torchvision.io.read_image(os.path.join(self.root, m['mask'])) == 255) if read_mask else  torch.empty((0, height, width), dtype = torch.bool)
         
         bbox = torch.as_tensor(bbox, dtype = torch.int16).unsqueeze(0)
         area = (bbox[..., 2] - bbox[..., 0]) * (bbox[..., 3] - bbox[..., 1])
@@ -58,7 +57,7 @@ class Pix3d(torchvision.datasets.VisionDataset):
             mask_path  = m['mask'],
             category   = m['category'], 
             
-            boxes = bbox,
+            boxes = bbox, # xyxy
             area = area,
             iscrowd = iscrowd,
             labels = labels,
