@@ -30,7 +30,8 @@ class Pix3dEvaluator(dict):
         if not self.mesh_cache:
              self.mesh_cache = {model_path : (mesh[0], mesh[1].verts_idx) for model_path in self.dataset.shape_idx for mesh in [pytorch3d.io.load_obj(os.path.join(self.dataset.root, model_path), load_textures = False)]}
 
-        pix3d_metrics = evaluate_for_pix3d(list(self.values()), npos = self.npos, cocoapi = self.cocoapi, image_root = self.image_root, mesh_models = self.mesh_cache, iou_thresh = iou_thresh, thing_dataset_id_to_contiguous_id = {k : k for k in range(len(self.categories))})
+        pix3d_metrics = evaluate_for_pix3d(list(self.values()), npos = self.npos, cocoapi = self.cocoapi, image_root = self.image_root, mesh_models = self.mesh_cache, iou_thresh = iou_thresh, thing_dataset_id_to_contiguous_id = {k : k - 1 for k in range(len(self.categories))})
+        
         print("Box  AP {:.5f}".forrmat(pix3d_metrics["box_ap@{:.1f}".format(iou_thresh)]))
         print("Mask AP {:.5f}".format(pix3d_metrics["mask_ap@{:.1f}".format(iou_thresh)]))
         print("Mesh AP {:.5f}".format(pix3d_metrics["mesh_ap@{:.1f}".format(iou_thresh)]))

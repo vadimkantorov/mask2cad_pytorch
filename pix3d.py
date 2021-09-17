@@ -7,7 +7,7 @@ import torchvision
 import pycocotools.coco, pycocotools.mask    
 
 class Pix3d(torchvision.datasets.VisionDataset):
-    categories           = ['background', 'bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
+    categories           = ['BACKGROUND', 'bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
     categories_coco_inds = [0,            65   , -1        , 63      , -1   , -1    ,  63   , 67     , -1    ,  -1       ]
 
     def __init__(self, root, split_path = None, max_image_size = None, drop_images = ('img/table/1749.jpg', 'img/table/0045.png'), transforms = None, **kwargs):
@@ -45,7 +45,7 @@ class Pix3d(torchvision.datasets.VisionDataset):
         bbox = torch.as_tensor(bbox, dtype = torch.int16).unsqueeze(0)
         area = (bbox[..., 2] - bbox[..., 0]) * (bbox[..., 3] - bbox[..., 1])
         iscrowd = torch.zeros(len(bbox), dtype = torch.uint8)
-        labels = 1 + torch.tensor(self.category_idx[m['category']]).unsqueeze(0)
+        labels = torch.tensor(self.category_idx[m['category']]).unsqueeze(0)
         masks = mask.unsqueeze(0)
         object_location = torch.as_tensor(m['trans_mat'], dtype = torch.float64).unsqueeze(0)
         object_rotation = torch.as_tensor(m['rot_mat'  ], dtype = torch.float64).unsqueeze(0)

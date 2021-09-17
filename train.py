@@ -37,17 +37,20 @@ import pix3d
 import pix3d_eval
 import coco_eval 
 
+def to_device(images, targets, device):
+    images = images.to(device) 
+    targets = {k: v.to(device) if torch.is_tensor(v) else v for k, v in targets.items()}
+    return images, targets
+
+def from_device(outputs):
+    return [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
+
 def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda x: 1 if x >= warmup_iters else warmup_factor * (1 - x / warmup_iters) + x / warmup_iters)
 
 def mix_losses(loss_dict, loss_weights):
     return sum(loss_dict[k] * loss_weights[k] for k in loss_dict)
        
-def to_device(images, targets, device):
-    images = images.to(device) 
-    targets = {k: v.to(device) if torch.is_tensor(v) else v for k, v in targets.items()}
-    return images, targets
-
 def recall(pred_idx, true_idx, K = 1):
     true_idx = true_idx.unsqueeze(-1) if true_idx.ndim < pred_idx.ndim else true_idx 
     assert pred_idx.shape == true_idx.shape
@@ -74,11 +77,9 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, ar
         if lr_scheduler is not None:
             lr_scheduler.step()
 
-        metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
-        metric_logger.update(lr=optimizer.param_groups[0]['lr'])
+        metric_logger.update(loss = losses_reduced, lr = optimizer.param_groups[0]['lr'], **loss_dict_reduced)
 
     return metric_logger
-
 
 @torch.no_grad()
 def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device):
@@ -94,7 +95,7 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
 
         tic = time.time()
         outputs = model(images, targets, mode = args.device, shape_retrieval = shape_retrieval)
-        outputs = [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
+        outputs = from_device(outputs)
         toc_model = time.time() - tic
 
         pred_shape_idx.extend(o['shape_idx_all'] for o in outputs)
@@ -136,7 +137,6 @@ def main(args):
     train_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.train_metadata_path, transforms = transforms.MaskRCNNAugmentations() if args.mode == 'MaskRCNN' else None)
     aspect_ratios, num_categories = train_dataset.aspect_ratios, len(train_dataset.categories)
     train_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_object_rotation_quat, train_dataset, transforms = transforms.Mask2CADAugmentations() if args.mode == 'Mask2CAD' else None)
-    # TODO: unify naming
     object_rotation_quat = train_dataset_with_views.object_rotation_quat
     
     val_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
