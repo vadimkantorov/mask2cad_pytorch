@@ -53,10 +53,10 @@ class Mask2CAD(nn.Module):
         self.pose_refinement_branch[-1].bias[3::4] = quat_fill # xyzw
 
     def forward(self, images, targets, mode = None, P = 4, N = 8):
-        if mode == 'MaskRCNN':
-            return self.object_detector(images, targets)
+        bbox, category_idx, masks, shape_idx, object_location, object_rotation_quat = map(targets.get, ['boxes', 'labels', 'masks', 'shape_idx', 'object_location', 'object_rotation_quat'])
         
-        bbox, category_idx, shape_idx, object_location, object_rotation_quat = map(targets.get, ['boxes', 'labels', 'shape_idx', 'object_location', 'object_rotation_quat'])
+        if mode == 'MaskRCNN':
+            return self.object_detector(images, [dict(labels = l, boxes = b, masks = m) for l, b, m in zip(category_idx, bbox, masks)])
         
         # input / output boxes are xyxy
         if bbox is not None and category_idx is not None:
@@ -90,12 +90,13 @@ class Mask2CAD(nn.Module):
         #object_rotation_bins, object_rotation_delta, center_delta = [self.index_select_batched(t, category_idx) for t in [object_rotation_bins, object_rotation_delta, center_delta]]
 
         if self.training:
-            B = img.shape[0]
+            B = images.shape[0]
             Q = category_idx.shape[-1]
+            rendered = targets['shape_views']
             V = rendered.shape[-4] // Q
             rendered_view_features = self.rendered_view_encoder(rendered.flatten(end_dim = -4)).unflatten(0, (B, Q, V))
         
-            target_object_rotation_bins, target_object_rotation_delta, target_center_delta = self.compute_rotation_location_targets(category_idx, bbox, object_location, object_rotation_quat)
+            target_object_rotation_bins, target_object_rotation_delta, target_center_delta = self.compute_rotation_location_targets(category_idx, bbox, object_location, object_rotation_quat = quat.from_matrix(targets['object_rotation']))
             shape_embedding_loss = self.shape_embedding_loss(shape_embedding.unflatten(0, (B, Q)), rendered_view_features, category_idx = category_idx, shape_idx = shape_idx, P = P, N = N)
             pose_classification_loss, pose_regression_loss, center_regression_loss = self.pose_estimation_loss(self.index_select_batched(object_rotation_bins.unflatten(0, (B, Q)), category_idx), self.index_select_batched(object_rotation_delta.unflatten(0, (B, Q)), category_idx), self.index_select_batched(center_delta.unflatten(0, (B, Q)), category_idx), target_object_rotation_bins, target_object_rotation_delta, target_center_delta)
             

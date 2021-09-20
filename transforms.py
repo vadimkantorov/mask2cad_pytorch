@@ -3,6 +3,7 @@ import torch
 import torchvision
 
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.transforms.transforms as T
 
 #scale_factor = min(self.target_image_size[0] / img.shape[-1], self.target_image_size[1] / img.shape[-2])
@@ -18,8 +19,8 @@ class MaskRCNNAugmentations(nn.Module):
     def __init__(self, p = 0.5, short_edge_length = (800,), max_size = 1333):
         super().__init__()
         # https://github.com/facebookresearch/detectron2/blob/main/configs/common/data/coco.py
-		self.transforms = [ResizeShortestEdge(short_edge_length = short_edge_length, max_size = max_size), RandomHorizontalFlip(p = p)]
-		# L(T.ResizeShortestEdge)(short_edge_length=800, max_size=1333),
+        self.transforms = [ResizeShortestEdge(short_edge_length = short_edge_length, max_size = max_size), RandomHorizontalFlip(p = p)]
+        # L(T.ResizeShortestEdge)(short_edge_length=800, max_size=1333),
 
     def forward(self, image, target):
         for t in self.transforms:
@@ -40,15 +41,15 @@ class ResizeShortestEdge(nn.Module):
     #Scale the shorter edge to the given size, with a limit of `max_size` on the longer edge.
     #If `max_size` is reached, then downscale so that the longer edge does not exceed max_size.
 
-    def __init__(self, short_edge_length, max_size=sys.maxsize, interp='bilinear'):
+    def __init__(self, short_edge_length, max_size=int(1e9), interp='bilinear'):
         super().__init__()
-		self.short_edge_length = short_edge_length
-		self.max_size = max_size
-		self.interp = interp
+        self.short_edge_length = short_edge_length
+        self.max_size = max_size
+        self.interp = interp
 
     def forward(self, image, target):
         h, w = image.shape[-2:]
-		size = random.choice(self.short_edge_length)
+        size = random.choice(self.short_edge_length)
 
         scale = size * 1.0 / min(h, w)
         if h < w:
@@ -62,14 +63,14 @@ class ResizeShortestEdge(nn.Module):
         neww = int(neww + 0.5)
         newh = int(newh + 0.5)
 
-        image = F.interpolate(img.unsqueeze(0), (new_h, new_w), mode = self.interp, align_corners = None if self.interp == "nearest" else False).squeeze(0)
-		if 'boxes' in target:
-			target['boxes'][..., 0::2] *= new_w / w
-			target['boxes'][..., 1::2] *= new_h / h
-		if 'masks' in target:        
-			target['masks'] = F.interpolate(target['masks'], (new_h, new_w), mode='nearest', align_corners = None )
+        image = F.interpolate(image.unsqueeze(0), (newh, neww), mode = self.interp, align_corners = None if self.interp == "nearest" else False).squeeze(0)
+        if 'boxes' in target:
+            target['boxes'][..., 0::2] *= neww / w
+            target['boxes'][..., 1::2] *= newh / h
+        if 'masks' in target:        
+            target['masks'] = F.interpolate(target['masks'].to(torch.uint8), (newh, neww), mode='nearest', align_corners = None ).to(torch.bool)
 
-		return image, target
+        return image, target
 
 class RandomHorizontalFlip(T.RandomHorizontalFlip):
     def forward(self, image, target):

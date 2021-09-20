@@ -120,11 +120,8 @@ class MetricLogger:
         self.last = {}
 
     def update(self, **kwargs):
-        self.last = kwargs
-        for k, v in kwargs.items():
-            if isinstance(v, torch.Tensor):
-                v = v.item()
-            assert isinstance(v, (float, int))
+        self.last = {k : v.item() if torch.is_tensor(v) else v for k, v in kwargs.items()}
+        for k, v in self.last.items():
             self.meters[k].update(v)
 
     def __getattr__(self, attr):

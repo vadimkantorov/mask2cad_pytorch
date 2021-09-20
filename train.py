@@ -50,33 +50,38 @@ def from_device(outputs):
     return [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
 
 def mix_losses(loss_dict, loss_weights):
-    return sum(loss_dict[k] * loss_weights[k] for k in loss_dict)
+    return sum(loss_dict[k] * loss_weights.get(k, 1.0) for k in loss_dict)
        
 def recall(pred_idx, true_idx, K = 1):
     true_idx = true_idx.unsqueeze(-1) if true_idx.ndim < pred_idx.ndim else true_idx 
     assert pred_idx.shape == true_idx.shape
     return (pred_idx == true_idx).any(dim = -1).float().mean()
 
-def train_one_epoch(log, epoch, iteration, model, optimizer, data_loader, device, epoch, print_freq, args):
+def LinearLR(optimizer, start_factor, total_iters):
+    # TODO: replace with torch.optim.lr_scheduler.LinearL upon a new pytorch release
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda x: 1 if x >= total_iters else start_factor * (1 - x / total_iters) + x / total_iters)
+
+def train_one_epoch(log, epoch, iteration, model, optimizer, data_loader, device, print_freq, args):
     metric_logger = utils.MetricLogger()
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
 
-    lr_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor = 1. / 1000, total_iters = min(1000, len(data_loader) - 1)) if epoch == 0 else None
+    lr_scheduler = LinearLR(optimizer, start_factor = 1. / 1000, total_iters = min(1000, len(data_loader) - 1)) if epoch == 0 else None
 
     model.train()
     for images, targets in metric_logger.log_every(data_loader, print_freq, header = 'Epoch: [{}]'.format(epoch)):
         images, targets = to_device(images, targets, device = args.device)
         loss_dict = model(images, targets, mode = args.mode)
-        losses = mix_losses(loss_dict, args.loss_weights) if args.mode == 'Mask2CAD' else sum(loss_dict.values())
+        loss_dict_reduced = utils.reduce_dict(loss_dict)
+        loss = mix_losses(loss_dict, args.loss_weights) if args.mode == 'Mask2CAD' else sum(loss_dict.values())
 
         optimizer.zero_grad()
-        losses.backward()
+        loss.backward()
         optimizer.step()
         if lr_scheduler is not None:
             lr_scheduler.step()
 
-        metric_logger.update(loss = losses_reduced, lr = optimizer.param_groups[0]['lr'], **loss_dict_reduced)
         if utils.is_main_process():
+            metric_logger.update(loss = float(mix_losses(loss_dict_reduced, args.loss_weights)), lr = optimizer.param_groups[0]['lr'], **loss_dict_reduced)
             log.write(json.dumps(dict(epoch = epoch, iteration = iteration, **metric_logger.last)) + '\n')
         iteration += 1
 
@@ -157,7 +162,8 @@ def main(args):
     object_rotation_quat = train_dataset_with_views.object_rotation_quat
     
     val_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.val_metadata_path)
-    val_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_object_rotation_quat, val_dataset)
+    val_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_object_rotation_quat, val_dataset, read_image = True, read_mask = True)
+    shape_dataset_with_views = datasets.RenderedViews(args.dataset_rendered_views_root, args.dataset_object_rotation_quat, val_dataset, read_image = False, read_mask = False)
     
     evaluator_detection = coco_eval.CocoEvaluator(val_dataset.as_coco_dataset(), ['bbox', 'segm'])
     evaluator_mesh = pix3d_eval.Pix3dEvaluator(val_dataset)
@@ -175,8 +181,8 @@ def main(args):
         #    train_batch_sampler = datasets.GroupedBatchSampler(train_sampler, datasets.create_aspect_ratio_groups(aspect_ratios.tolist(), k = args.aspect_ratio_group_factor), args.train_batch_size)
         #else:
         #    train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
-    
-        train_data_loader = torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
+        #    batch_sampler = train_batch_sampler 
+        train_data_loader = torch.utils.data.DataLoader(train_dataset, sampler = train_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
         val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size = args.val_batch_size, sampler = val_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
         shape_data_loader = None
     
@@ -188,6 +194,7 @@ def main(args):
         if args.distributed: 
             train_sampler_with_views = datasets.DistributedSamplerWrapper(train_sampler_with_views)
             val_sampler_with_views = datasets.DistributedSamplerWrapper(val_sampler_with_views)
+            shape_sampler_with_views = datasets.DistributedSamplerWrapper(shape_sampler_with_views)
         
         train_data_loader = torch.utils.data.DataLoader(train_dataset_with_views, sampler = train_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True)
         val_data_loader = torch.utils.data.DataLoader(val_dataset_with_views, sampler = val_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True)
@@ -222,7 +229,7 @@ def main(args):
     for epoch in range(args.start_epoch, args.num_epochs):
         if train_data_loader.sampler is not None:
             (getattr(train_data_loader.sampler, 'set_epoch', None) or print)(epoch)
-        iteration = train_one_epoch(log, epoch, iteration, model, optimizer, train_data_loader, args.device, epoch, args.print_freq, args)
+        iteration = train_one_epoch(log, epoch, iteration, model, optimizer, train_data_loader, args.device, args.print_freq, args)
         lr_scheduler.step()
 
         if False and args.output_path:

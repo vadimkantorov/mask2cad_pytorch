@@ -13,13 +13,13 @@ class Pix3dEvaluator(dict):
     def __init__(self, dataset):
         self.dataset = dataset
         self.mesh_cache = None
-        sefl.cocoapi = dataset.as_coco_dataset()
+        self.cocoapi = dataset.as_coco_dataset()
         self.npos = dataset.num_by_category
         self.image_root = self.dataset.root
         self.categories = self.dataset.categories
     
     def update(self, predictions):
-        preds = { image_id : dict(image_id = image_id, instances = dict(pred['instances'], pred_masks_rle = [ rle for mask in pred_masks for rle in [ pycocotools.mask.encode(mask.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy())[0] ] ]    )) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
+        preds = { image_id : dict(image_id = image_id, instances = dict(pred['instances'], pred_masks_rle = [ rle for mask in pred_masks for rle in [ pycocotools.mask.encode(mask.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy()) ] ]    )) for image_id, pred in predictions.items() for pred_masks in [pred['instances'].pop('pred_masks')] }
         super().update(preds)
 
     def synchronize_between_processes(self):

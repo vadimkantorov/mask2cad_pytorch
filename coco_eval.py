@@ -92,7 +92,7 @@ class CocoEvaluator(object):
 
             rles = [
                 dict(rle, counts = rle['counts'].decode('utf-8'))
-                for mask in masks for rle in [pycocotools.mask.encode(mask.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy())[0]]
+                for mask in masks for rle in [pycocotools.mask.encode(mask.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy())]
             ]
 
             coco_results.extend(

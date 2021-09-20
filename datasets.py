@@ -14,8 +14,8 @@ import torchvision
 
 def create_aspect_ratio_groups(aspect_ratios, k=0):
     bins = (2 ** torch.linspace(-1, 1, 2 * k + 1)).tolist() if k > 0 else [1.0]
-	bins = sorted(copy.deepcopy(bins))
-	groups = [bisect.bisect_right(bins, y) for y in aspect_ratios]
+    bins = sorted(copy.deepcopy(bins))
+    groups = [bisect.bisect_right(bins, y) for y in aspect_ratios]
     # count number of elements per group
     counts = torch.unique(groups, return_counts=True)[1]
     fbins = [0] + bins + [math.inf]
@@ -25,14 +25,17 @@ def create_aspect_ratio_groups(aspect_ratios, k=0):
     
 
 class RenderedViews(torchvision.datasets.VisionDataset):
-    def __init__(self, root, object_rotation_quat_path, dataset, transforms = None, ext = '.jpg'):
+    def __init__(self, root, object_rotation_quat_path, dataset, transforms = None, ext = '.jpg', read_image = True, read_mask = True):
         super().__init__(root = root, transforms = transforms)
         self.dataset = dataset
         self.ext = ext
-        self.object_rotation_quat = torch.tensor(list(map(json.load(open(object_rotation_quat_path)).get, dataset.categories)), dtype = torch.float32)
+        self.read_image = read_image
+        self.read_mask = read_mask
+        self.object_rotation_quat = torch.tensor(list(map(json.load(open(object_rotation_quat_path)).get, dataset.categories[1:])), dtype = torch.float32)
+        self.object_rotation_quat = torch.cat([torch.zeros_like(self.object_rotation_quat[:1]), self.object_rotation_quat])
 
     def __getitem__(self, idx):
-        images, targets = self.dataset.__getitem__(idx[0], read_image = False, read_mask = False) 
+        images, targets = self.dataset.__getitem__(idx[0], read_image = self.read_image, read_mask = self.read_mask) 
         view_dir = os.path.join(self.root, targets['shape_path'])
 
         or_jpg = lambda path, ext = '.png': torchvision.io.read_image(path if os.path.exists(path) else path.replace(ext, '.jpg'))
@@ -102,111 +105,108 @@ def stack_jagged(tensors, fill_value = 0):
     res = torch.full(shape, fill_value, dtype = tensors[0].dtype, device = tensors[0].device)
     for u, t in zip(res, tensors):
         u[tuple(map(slice, t.shape))] = t
-    return u
+    return res
 
 def collate_fn(batch):
     assert batch
-
     images = stack_jagged([b[0] for b in batch])
-    
     targets = dict(
         image_id        = [b[1]['image_id']                     for b in batch], 
         shape_path      = [b[1]['shape_path']                   for b in batch], 
         mask_path       = [b[1]['mask_path']                    for b in batch], 
         category        = [b[1]['category']                     for b in batch],
 
-        num_boxes       = torch.tensor([len(b[1]['boxes']       for b in batch]),
+        num_boxes       = torch.tensor([len(b[1]['boxes'])      for b in batch]),
         boxes           = stack_jagged([b[1]['boxes']           for b in batch]),
         masks           = stack_jagged([b[1]['masks']           for b in batch]), 
         shape_idx       = stack_jagged([b[1]['shape_idx']       for b in batch]), 
         labels          = stack_jagged([b[1]['labels']          for b in batch]), 
         object_location = stack_jagged([b[1]['object_location'] for b in batch]),
         object_rotation = stack_jagged([b[1]['object_rotation'] for b in batch]),
-        views           = stack_jagged([b[2] for b in batch]) if len(batch[0]) > 2 else None,
+        shape_views     = stack_jagged([b[1]['shape_views']     for b in batch]) if 'shape_views' in batch[0][1] else None
     )
-   
     return images, targets
 
 # https://github.com/pytorch/pytorch/issues/23430
 # https://discuss.pytorch.org/t/how-to-use-my-own-sampler-when-i-already-use-distributedsampler/62143/22
 # https://github.com/catalyst-team/catalyst/blob/master/catalyst/data/sampler.py
 class DatasetFromSampler(torch.utils.data.Dataset):
-	def __init__(self, sampler: torch.utils.data.Sampler):
-		self.sampler = sampler
-		self.sampler_list = None
+    def __init__(self, sampler: torch.utils.data.Sampler):
+        self.sampler = sampler
+        self.sampler_list = None
 
-	def __getitem__(self, index: int):
-		if self.sampler_list is None:
-			self.sampler_list = list(self.sampler)
-		return self.sampler_list[index]
+    def __getitem__(self, index: int):
+        if self.sampler_list is None:
+            self.sampler_list = list(self.sampler)
+        return self.sampler_list[index]
 
-	def __len__(self) -> int:
-		return len(self.sampler)
+    def __len__(self) -> int:
+        return len(self.sampler)
 
 
 class DistributedSamplerWrapper(torch.utils.data.DistributedSampler):
-	"""
-	Wrapper over `Sampler` for distributed training.
-	Allows you to use any sampler in distributed mode.
-	It is especially useful in conjunction with
-	`torch.nn.parallel.DistributedDataParallel`. In such case, each
-	process can pass a DistributedSamplerWrapper instance as a DataLoader
-	sampler, and load a subset of subsampled data of the original dataset
-	that is exclusive to it.
-	.. note::
-		Sampler is assumed to be of constant size.
-	"""
+    """
+    Wrapper over `Sampler` for distributed training.
+    Allows you to use any sampler in distributed mode.
+    It is especially useful in conjunction with
+    `torch.nn.parallel.DistributedDataParallel`. In such case, each
+    process can pass a DistributedSamplerWrapper instance as a DataLoader
+    sampler, and load a subset of subsampled data of the original dataset
+    that is exclusive to it.
+    .. note::
+        Sampler is assumed to be of constant size.
+    """
 
-	def __init__(
-			self,
-			sampler,
-			num_replicas: typing.Optional[int] = None,
-			rank: typing.Optional[int] = None,
-			shuffle: bool = False,
-	):
-		"""
-		Args:
-			sampler: Sampler used for subsampling
-			num_replicas (int, optional): Number of processes participating in
-			  distributed training
-			rank (int, optional): Rank of the current process
-			  within ``num_replicas``
-			shuffle (bool, optional): If true sampler will shuffle the indices
-		"""
-		super().__init__(
-			DatasetFromSampler(sampler),
-			num_replicas = num_replicas,
-			rank = rank,
-			shuffle = shuffle,
-		)
-		self.sampler = sampler
+    def __init__(
+            self,
+            sampler,
+            num_replicas = None,
+            rank = None,
+            shuffle: bool = False,
+    ):
+        """
+        Args:
+            sampler: Sampler used for subsampling
+            num_replicas (int, optional): Number of processes participating in
+              distributed training
+            rank (int, optional): Rank of the current process
+              within ``num_replicas``
+            shuffle (bool, optional): If true sampler will shuffle the indices
+        """
+        super().__init__(
+            DatasetFromSampler(sampler),
+            num_replicas = num_replicas,
+            rank = rank,
+            shuffle = shuffle,
+        )
+        self.sampler = sampler
 
-	def __iter__(self):
-		# comments are specific for BucketingBatchSampler as self.sampler, variable names are kept from Catalyst
-		self.dataset = DatasetFromSampler(self.sampler)  # hack for DistributedSampler compatibility
-		indexes_of_indexes = super().__iter__()  # type: List[int] # batch indices of BucketingBatchSampler
-		subsampler_indexes = self.dataset  # type: List[List[int]] # original example indices
-		ddp_sampling_operator = operator.itemgetter(
-			*indexes_of_indexes)  # operator to extract rank specific batches from original sampled
-		return iter(ddp_sampling_operator(subsampler_indexes))  # type: Iterable[List[int]]
+    def __iter__(self):
+        # comments are specific for BucketingBatchSampler as self.sampler, variable names are kept from Catalyst
+        self.dataset = DatasetFromSampler(self.sampler)  # hack for DistributedSampler compatibility
+        indexes_of_indexes = super().__iter__()  # type: List[int] # batch indices of BucketingBatchSampler
+        subsampler_indexes = self.dataset  # type: List[List[int]] # original example indices
+        ddp_sampling_operator = operator.itemgetter(
+            *indexes_of_indexes)  # operator to extract rank specific batches from original sampled
+        return iter(ddp_sampling_operator(subsampler_indexes))  # type: Iterable[List[int]]
 
-	def state_dict(self):
-		return self.sampler.state_dict()
+    def state_dict(self):
+        return self.sampler.state_dict()
 
-	def load_state_dict(self, state_dict):
-		self.sampler.load_state_dict(state_dict)
+    def load_state_dict(self, state_dict):
+        self.sampler.load_state_dict(state_dict)
 
-	def set_epoch(self, epoch):
-		super().set_epoch(epoch)
-		self.sampler.set_epoch(epoch)
+    def set_epoch(self, epoch):
+        super().set_epoch(epoch)
+        self.sampler.set_epoch(epoch)
 
-	@property
-	def batch_idx(self):
-		return self.sampler.batch_idx
+    @property
+    def batch_idx(self):
+        return self.sampler.batch_idx
 
-	@batch_idx.setter
-	def batch_idx(self, value):
-		self.sampler.batch_idx = value
+    @batch_idx.setter
+    def batch_idx(self, value):
+        self.sampler.batch_idx = value
 
 
 
@@ -235,7 +235,7 @@ class GroupedBatchSampler(torch.utils.data.BatchSampler):
         self.batch_size = batch_size
 
     def __iter__(self):
-		_repeat_to_at_least = lambda iterable, n: list(itertools.chain.from_iterable(itertools.repeat(iterable, math.ceil(n / len(iterable)))))
+        _repeat_to_at_least = lambda iterable, n: list(itertools.chain.from_iterable(itertools.repeat(iterable, math.ceil(n / len(iterable)))))
 
         buffer_per_group  = collections.defaultdict(list)
         samples_per_group = dollections.defaultdict(list)
