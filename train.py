@@ -37,6 +37,10 @@ import pix3d
 import pix3d_eval
 import coco_eval 
 
+def split_list(l, n):
+    cumsum = torch.tensor(n).cumsum(dim = -1).tolist()
+    return [l[(cumsum[i - 1] if i >= 1 else 0) : cumsum[i]] for i in range(len(cumsum))]
+
 def to_device(images, targets, device):
     images = images.to(device) 
     targets = {k: v.to(device) if torch.is_tensor(v) else v for k, v in targets.items()}
@@ -79,10 +83,15 @@ def train_one_epoch(log, epoch, iteration, model, optimizer, data_loader, device
     return iteration
 
 @torch.no_grad()
-def evaluate(log, epoch, iteration, model, data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device):
+def evaluate(log, epoch, iteration, model, data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device, K = 10):
     metric_logger = utils.MetricLogger()
     
-    shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
+    #shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
+
+    shape_embedding, shape_idx, shape_path = zip(*[(model.rendered_view_encoder(targets['shape_views'].flatten(end_dim = -4)), targets['shape_idx'].repeat(1, targets['shape_views'].shape[-4]).flatten(), [pp for p in targets['shape_path'] for pp in [p] * targets['shape_views'].shape[-4] ]  ) for img, targets in shape_data_loader])
+    shape_embedding, shape_idx, shape_path = F.normalize(torch.cat(shape_embedding), dim = -1), torch.cat(shape_idx), [s for b in shape_path for s in b]
+    shape_embedding, shape_idx, shape_path = torch.cat(utils.all_gather(shape_embedding)), torch.cat(utils.all_gather(shape_idx)), [s for ls in utils.all_gather(shape_path) for s in ls] 
+    
     pred_shape_idx, true_shape_idx = utils.CatTensors(), utils.CatTensors()
     pred_category_idx, true_category_idx = utils.CatTensors(), utils.CatTensors()
     
@@ -91,11 +100,18 @@ def evaluate(log, epoch, iteration, model, data_loader, shape_data_loader, evalu
         images, targets = to_device(images, targets, device = args.device)
 
         tic = time.time()
-        outputs = model(images, targets, mode = args.device, shape_retrieval = shape_retrieval)
-        outputs = from_device(outputs)
+        detections = model(images, targets, mode = args.device)
+        num_boxes = [len(d['boxes']) for d in detections]
+
+        idx = F.normalize(torch.cat(d['shape_embedding'] for d in detections), dim = -1).matmul(shape_embedding.t()).topk(K, dim = -1, largest = True).indices
+        shape_idx_, shape_path_ = self.shape_idx[idx], [self.shape_path[i[0]] for i in idx.tolist()]
+        for d, s in zip(detections, split_list(shape_path_, num_boxes)):
+            d['shape_path'] = s
+
+        #outputs = from_device(outputs)
         toc_model = time.time() - tic
 
-        pred_shape_idx.extend(o['shape_idx_all'] for o in outputs)
+        pred_shape_idx.extend(split_list(shape_idx_, num_boxes))
         true_shape_idx.extend(targets['shape_idx'])
         pred_category_idx.extend(o['labels'] for o in outputs)
         true_category_idx.extend(targets['labels'])
@@ -155,10 +171,10 @@ def main(args):
             train_sampler = torch.utils.data.RandomSampler(train_dataset)
             val_sampler = None
 
-        if args.aspect_ratio_group_factor >= 0:
-            train_batch_sampler = datasets.GroupedBatchSampler(train_sampler, datasets.create_aspect_ratio_groups(aspect_ratios.tolist(), k = args.aspect_ratio_group_factor), args.train_batch_size)
-        else:
-            train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
+        #if args.aspect_ratio_group_factor >= 0:
+        #    train_batch_sampler = datasets.GroupedBatchSampler(train_sampler, datasets.create_aspect_ratio_groups(aspect_ratios.tolist(), k = args.aspect_ratio_group_factor), args.train_batch_size)
+        #else:
+        #    train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
     
         train_data_loader = torch.utils.data.DataLoader(train_dataset, batch_sampler = train_batch_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
         val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size = args.val_batch_size, sampler = val_sampler, num_workers = args.num_workers, collate_fn = datasets.collate_fn)
@@ -167,14 +183,14 @@ def main(args):
     elif args.mode == 'Mask2CAD':
 
         train_sampler_with_views = datasets.RenderedViewsRandomSampler(len(train_dataset), num_rendered_views = args.num_rendered_views, num_sampled_views = args.num_sampled_views, num_sampled_boxes = args.num_sampled_boxes)
-        
-        val_sampler_with_views = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_rendered_view_dataset)
+        val_sampler_with_views = datasets.RenderedViewsSequentialSampler(50, args.num_rendered_views) # len(val_dataset_with_views) 
+        shape_sampler_with_views = datasets.UniqueShapeRenderedViewsSequentialSampler(val_dataset_with_views, args.num_rendered_views)
+        if args.distributed: 
+            train_sampler_with_views = datasets.DistributedSamplerWrapper(train_sampler_with_views)
+            val_sampler_with_views = datasets.DistributedSamplerWrapper(val_sampler_with_views)
         
         train_data_loader = torch.utils.data.DataLoader(train_dataset_with_views, sampler = train_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.train_batch_size, num_workers = args.num_workers, pin_memory = True)
-        
         val_data_loader = torch.utils.data.DataLoader(val_dataset_with_views, sampler = val_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True)
-
-        shape_sampler_with_views = datasets.UniqueShapeRenderedViewsSequentialSampler(val_dataset_with_views, args.num_rendered_views)
         shape_data_loader = torch.utils.data.DataLoader(val_dataset_with_views, sampler = shape_sampler_with_views, collate_fn = datasets.collate_fn, batch_size = args.val_batch_size, num_workers = args.num_workers, pin_memory = True)
 
     model = models.Mask2CAD(num_categories = num_categories, object_rotation_quat = object_rotation_quat)

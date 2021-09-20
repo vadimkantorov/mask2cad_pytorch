@@ -17,6 +17,9 @@ class ShapeRetrieval(nn.Module):
         idx = F.normalize(shape_embedding, dim = -1).matmul(self.shape_embedding.t()).topk(K, dim = -1, largest = True).indices
         return self.shape_idx[idx], [self.shape_path[i[0]] for i in idx.tolist()]
 
+    def synchronize_between_processes(self):
+        pass
+
 class Mask2CAD(nn.Module):
     def __init__(self, *, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, **kwargs_backbone):
         super().__init__()
@@ -49,7 +52,7 @@ class Mask2CAD(nn.Module):
         self.pose_refinement_branch[-1].bias.zero_()
         self.pose_refinement_branch[-1].bias[3::4] = quat_fill # xyzw
 
-    def forward(self, images, targets, shape_retrieval = None, mode = None, P = 4, N = 8):
+    def forward(self, images, targets, mode = None, P = 4, N = 8):
         if mode == 'MaskRCNN':
             return self.object_detector(images, targets)
         
@@ -67,8 +70,8 @@ class Mask2CAD(nn.Module):
             mask_features = self.object_detector.roi_heads.mask_head(mask_features)
             mask_logits = self.object_detector.roi_heads.mask_predictor(mask_features)
             
-            box_scores = self.index_left(scores, category_idx.flatten())
-            mask_probs = self.index_left(mask_logits, category_idx.flatten()).sigmoid()
+            box_scores = self.index_select_batched(scores, category_idx.flatten())
+            mask_probs = self.index_select_batched(mask_logits, category_idx.flatten()).sigmoid()
             detections = [dict(boxes = b, labels = c, scores = s, masks = m) for b, c, s, m in zip(bbox, category_idx, box_scores.split(num_boxes), mask_probs.split(num_boxes))]
 
         else:
@@ -76,7 +79,7 @@ class Mask2CAD(nn.Module):
             box_features = self.object_detector.roi_heads.box_roi_pool(*self.object_detector.roi_heads.mask_roi_pool.args)
             mask_logits = self.object_detector.roi_heads.mask_predictor.output
             category_idx = torch.cat([d['labels'] for d in detections])
-            mask_probs = self.index_left(mask_logits, category_idx).sigmoid()
+            mask_probs = self.index_select_batched(mask_logits, category_idx).sigmoid()
             bbox = torch.cat([d['boxes'] for d in detections])
         
         box_features = F.interpolate(box_features, mask_probs.shape[-2:]) * mask_probs.unsqueeze(-3)
@@ -84,7 +87,7 @@ class Mask2CAD(nn.Module):
         object_rotation_bins = self.pose_classification_branch(box_features).unflatten(-1, (self.num_categories_with_bg, self.num_rotation_clusters))
         object_rotation_delta = self.pose_refinement_branch(box_features).unflatten(-1, (self.num_categories_with_bg, 4))
         center_delta = self.center_regression_branch(box_features).unflatten(-1, (self.num_categories_with_bg, 2))
-        #object_rotation_bins, object_rotation_delta, center_delta = [self.index_left(t, category_idx) for t in [object_rotation_bins, object_rotation_delta, center_delta]]
+        #object_rotation_bins, object_rotation_delta, center_delta = [self.index_select_batched(t, category_idx) for t in [object_rotation_bins, object_rotation_delta, center_delta]]
 
         if self.training:
             B = img.shape[0]
@@ -94,30 +97,24 @@ class Mask2CAD(nn.Module):
         
             target_object_rotation_bins, target_object_rotation_delta, target_center_delta = self.compute_rotation_location_targets(category_idx, bbox, object_location, object_rotation_quat)
             shape_embedding_loss = self.shape_embedding_loss(shape_embedding.unflatten(0, (B, Q)), rendered_view_features, category_idx = category_idx, shape_idx = shape_idx, P = P, N = N)
-            pose_classification_loss, pose_regression_loss, center_regression_loss = self.pose_estimation_loss(self.index_left(object_rotation_bins.unflatten(0, (B, Q)), category_idx), self.index_left(object_rotation_delta.unflatten(0, (B, Q)), category_idx), self.index_left(center_delta.unflatten(0, (B, Q)), category_idx), target_object_rotation_bins, target_object_rotation_delta, target_center_delta)
+            pose_classification_loss, pose_regression_loss, center_regression_loss = self.pose_estimation_loss(self.index_select_batched(object_rotation_bins.unflatten(0, (B, Q)), category_idx), self.index_select_batched(object_rotation_delta.unflatten(0, (B, Q)), category_idx), self.index_select_batched(center_delta.unflatten(0, (B, Q)), category_idx), target_object_rotation_bins, target_object_rotation_delta, target_center_delta)
             
             return dict(shape_embedding = shape_embedding_loss, pose_classification = pose_classification_loss, pose_regression = pose_regression_loss, center_regression = center_regression_loss)
 
         else:
             category_idx = category_idx.flatten()
-            anchor_quat = self.index_left(self.object_rotation_quat[category_idx], self.index_left(object_rotation_bins.argmax(dim = -1), category_idx))
-            object_rotation = quat.quatprod(anchor_quat, self.index_left(object_rotation_delta, category_idx))
+            anchor_quat = self.index_select_batched(self.object_rotation_quat[category_idx], self.index_select_batched(object_rotation_bins.argmax(dim = -1), category_idx))
+            object_rotation = quat.quatprod(anchor_quat, self.index_select_batched(object_rotation_delta, category_idx))
             center_xy, width_height = self.xyxy_to_cxcywh(bbox).split(2, dim = -1)
-            object_location = center_xy + self.index_left(center_delta, category_idx) * width_height
+            object_location = center_xy + self.index_select_batched(center_delta, category_idx) * width_height
             num_boxes = [len(d['boxes']) for d in detections]
-
-            shape_idx, shape_path = shape_retrieval(shape_embedding) if shape_retrieval is not None else (-torch.ones_like(sum(num_boxes)), [None] * sum(num_boxes))
-            shape_idx, shape_idx_all = shape_idx[..., 0], shape_idx
             image_id = targets['image_id'] if targets else [None] * len(images)
 
-            for d, g, l, r, s, p, i, ii in zip(detections, image_id, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes), self.split_list(shape_path, num_boxes), shape_idx.split(num_boxes),  shape_idx_all.split(num_boxes)):
+            for d, g, l, r, s in zip(detections, image_id, object_location.split(num_boxes), object_rotation.split(num_boxes), shape_embedding.split(num_boxes)):
                 d['image_id'] = g
                 d['location3d_center_xy'] = l
                 d['rotation3d_quat'] = r
-                d['shape_embedding'] = s if shape_retrieval is None else None
-                d['shape_path'] = p if shape_retrieval is not None else None
-                d['shape_idx'] = i if shape_retrieval is not None else None
-                d['shape_idx_all'] = ii if shape_retrieval is not None else None
+                d['shape_embedding'] = s
 
             return detections
     
@@ -126,7 +123,7 @@ class Mask2CAD(nn.Module):
         object_rotation_bins = quat.quatcdist(object_rotation_quat.unsqueeze(-2), anchor_quat).squeeze(-2).argmin(dim = -1)
         
         # x * q = t => x = t * q ** -1
-        object_rotation_delta = quat.quatprodinv(self.index_left(anchor_quat, object_rotation_bins), object_rotation_quat)
+        object_rotation_delta = quat.quatprodinv(self.index_select_batched(anchor_quat, object_rotation_bins), object_rotation_quat)
 
         center_xy, width_height = self.xyxy_to_cxcywh(bbox).split(2, dim = -1)
         center_delta = (object_location[..., :2] - center_xy) / width_height
@@ -166,13 +163,8 @@ class Mask2CAD(nn.Module):
         return torch.stack([center_x, center_y, width, height], dim = -1)
 
     @staticmethod
-    def index_left(tensor, I):
+    def index_select_batched(tensor, I):
         return tensor.gather(I.ndim, I[(...,) + (None,) * (tensor.ndim - I.ndim)].expand((-1,) * (I.ndim + 1) + tensor.shape[I.ndim + 1:])).squeeze(I.ndim)
-
-    @staticmethod
-    def split_list(l, n):
-        cumsum = torch.tensor(n).cumsum(dim = -1).tolist()
-        return [l[(cumsum[i - 1] if i >= 1 else 0) : cumsum[i]] for i in range(len(cumsum))]
         
 
 class CacheInputOutput(nn.Module):
