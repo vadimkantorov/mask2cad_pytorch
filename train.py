@@ -17,6 +17,7 @@ import os
 import sys
 import time
 import math
+import json
 import argparse
 import datetime
 
@@ -28,7 +29,6 @@ import pytorch3d.io
 
 import datasets
 import models
-import samplers
 import transforms
 import utils
 import quat
@@ -45,9 +45,6 @@ def to_device(images, targets, device):
 def from_device(outputs):
     return [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
 
-def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda x: 1 if x >= warmup_iters else warmup_factor * (1 - x / warmup_iters) + x / warmup_iters)
-
 def mix_losses(loss_dict, loss_weights):
     return sum(loss_dict[k] * loss_weights[k] for k in loss_dict)
        
@@ -56,40 +53,40 @@ def recall(pred_idx, true_idx, K = 1):
     assert pred_idx.shape == true_idx.shape
     return (pred_idx == true_idx).any(dim = -1).float().mean()
 
-def train_one_epoch(model, optimizer, data_loader, device, epoch, print_freq, args):
-    model.train()
-    metric_logger = utils.MetricLogger(delimiter='  ')
+def train_one_epoch(log, epoch, iteration, model, optimizer, data_loader, device, epoch, print_freq, args):
+    metric_logger = utils.MetricLogger()
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
 
-    lr_scheduler = warmup_lr_scheduler(optimizer, min(1000, len(data_loader) - 1), warmup_factor = 1. / 1000) if epoch == 0 else None
+    lr_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor = 1. / 1000, total_iters = min(1000, len(data_loader) - 1)) if epoch == 0 else None
 
-    batch = next(iter(data_loader))
+    model.train()
     for images, targets in metric_logger.log_every(data_loader, print_freq, header = 'Epoch: [{}]'.format(epoch)):
         images, targets = to_device(images, targets, device = args.device)
-
         loss_dict = model(images, targets, mode = args.mode)
         losses = mix_losses(loss_dict, args.loss_weights) if args.mode == 'Mask2CAD' else sum(loss_dict.values())
 
         optimizer.zero_grad()
         losses.backward()
         optimizer.step()
-
         if lr_scheduler is not None:
             lr_scheduler.step()
 
         metric_logger.update(loss = losses_reduced, lr = optimizer.param_groups[0]['lr'], **loss_dict_reduced)
+        if utils.is_main_process():
+            log.write(json.dumps(dict(epoch = epoch, iteration = iteration, **metric_logger.last)) + '\n')
+        iteration += 1
 
-    return metric_logger
+    return iteration
 
 @torch.no_grad()
-def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device):
-    model.eval()
-    metric_logger = utils.MetricLogger(delimiter = '  ')
+def evaluate(log, epoch, iteration, model, data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device):
+    metric_logger = utils.MetricLogger()
     
     shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
     pred_shape_idx, true_shape_idx = utils.CatTensors(), utils.CatTensors()
     pred_category_idx, true_category_idx = utils.CatTensors(), utils.CatTensors()
     
+    model.eval()
     for images, targets in metric_logger.log_every(data_loader, 100, header = 'Test:'):
         images, targets = to_device(images, targets, device = args.device)
 
@@ -112,7 +109,6 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
         toc_evaluator_mesh = time.time() - tic
 
         metric_logger.update(time_model = toc_model, time_evaluator_detection = toc_evaluator_detection, time_evaluator_mesh = toc_evaluator_mesh)
-        break
     
     if args.distributed:
         pred_shape_idx.synchronize_between_processes()
@@ -127,12 +123,17 @@ def evaluate(model, data_loader, shape_data_loader, evaluator_detection, evaluat
     if utils.is_main_process():
         recall_shape = recall(pred_shape_idx.cat(), true_shape_idx.cat(), K = 5)
         recall_category = recall(pred_category_idx.cat(), true_category_idx.cat(), K = 1)
-        print('Detection', evaluator_detection.evaluate())
-        print('Mesh', evaluator_mesh.evaluate()) #TODO: average by category
+        detection_res = evaluator_detection.evaluate()
+        mesh_res = evaluator_mesh.evaluate()
+        line = json.dumps(dict(epoch = epoch, iteration = iteration, recall_shape = recall_shape, recall_category = recall_category, detection_res = detection_res, mesh_res = mesh_res))
+        print(line)
+        log.write(line + '\n')
 
 def main(args):
     os.makedirs(args.output_path, exist_ok = True)
     utils.init_distributed_mode(args)
+
+    log = open(args.log, 'w') if utils.is_main_process() else None
 
     train_dataset = pix3d.Pix3d(args.dataset_root, split_path = args.train_metadata_path, transforms = transforms.MaskRCNNAugmentations() if args.mode == 'MaskRCNN' else None)
     aspect_ratios, num_categories = train_dataset.aspect_ratios, len(train_dataset.categories)
@@ -148,14 +149,14 @@ def main(args):
     if args.mode == 'MaskRCNN':
         
         if args.distributed: 
-            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-            val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
+            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle = True)
+            val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle = False)
         else:
             train_sampler = torch.utils.data.RandomSampler(train_dataset)
-            val_sampler = torch.utils.data.SequentialSampler(val_dataset)
+            val_sampler = None
 
         if args.aspect_ratio_group_factor >= 0:
-            train_batch_sampler = samplers.GroupedBatchSampler(train_sampler, samplers.create_aspect_ratio_groups(aspect_ratios.tolist(), k = args.aspect_ratio_group_factor), args.train_batch_size)
+            train_batch_sampler = datasets.GroupedBatchSampler(train_sampler, datasets.create_aspect_ratio_groups(aspect_ratios.tolist(), k = args.aspect_ratio_group_factor), args.train_batch_size)
         else:
             train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.train_batch_size, drop_last=True)
     
@@ -198,13 +199,14 @@ def main(args):
         args.start_epoch = checkpoint['epoch'] + 1
 
     if args.evaluate_only:
-        return evaluate(model, val_data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device=args.device)
+        return evaluate(log, args.start_epoch, 0, model, val_data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device=args.device)
 
     tic = time.time()
+    iteration = 1
     for epoch in range(args.start_epoch, args.num_epochs):
         if train_data_loader.sampler is not None:
             (getattr(train_data_loader.sampler, 'set_epoch', None) or print)(epoch)
-        train_one_epoch(model, optimizer, train_data_loader, args.device, epoch, args.print_freq, args)
+        iteration = train_one_epoch(log, epoch, iteration, model, optimizer, train_data_loader, args.device, epoch, args.print_freq, args)
         lr_scheduler.step()
 
         if False and args.output_path:
@@ -218,7 +220,7 @@ def main(args):
             utils.save_on_main(checkpoint, os.path.join(args.output_path, 'model_{}.pt'.format(epoch)))
             utils.save_on_main(checkpoint, os.path.join(args.output_path, 'checkpoint.pt'))
 
-        evaluate(model, val_data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device = args.device)
+        evaluate(log, epoch, iteration, model, val_data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device = args.device)
 
     print('Training time', datetime.timedelta(seconds = int(time.time() - tic)))
 
@@ -227,6 +229,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--world-size', default=1, type=int, help='number of distributed processes')
     parser.add_argument('--dist-url', default='env://', help='url used to set up distributed training')
+    parser.add_argument('--log', default='data/log.jsonl')
     
     parser.add_argument('--dataset-root', default = 'data/common/pix3d')
     parser.add_argument('--train-metadata-path', default = 'data/common/pix3d_splits/pix3d_s2_train.json')
