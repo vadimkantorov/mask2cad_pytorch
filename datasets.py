@@ -125,6 +125,8 @@ def collate_fn(batch):
         object_rotation = stack_jagged([b[1]['object_rotation'] for b in batch]),
         shape_views     = stack_jagged([b[1]['shape_views']     for b in batch]) if 'shape_views' in batch[0][1] else None
     )
+    if images.shape[1] != 3:
+        breakpoint()
     return images, targets
 
 # https://github.com/pytorch/pytorch/issues/23430

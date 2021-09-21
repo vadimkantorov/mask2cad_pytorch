@@ -42,8 +42,8 @@ class Pix3d(torchvision.datasets.VisionDataset):
         width, height = m['img_size']
         bbox = m['bbox']
         
-        image = (torchvision.io.read_image(os.path.join(self.root, m['img']))  / 255.0) if read_image else torch.empty((0, height, width), dtype = torch.float32)
-        mask = (torchvision.io.read_image(os.path.join(self.root, m['mask'])) == 255  ) if read_mask  else torch.empty((0, height, width), dtype = torch.bool)
+        image = (torchvision.io.read_image(os.path.join(self.root, m['img']))[:3]  / 255.0) if read_image else torch.empty((0, height, width), dtype = torch.float32)
+        mask = (torchvision.io.read_image(os.path.join(self.root, m['mask']))     == 255  ) if read_mask  else torch.empty((0, height, width), dtype = torch.bool)
         
         bbox = torch.as_tensor(bbox, dtype = torch.float32).unsqueeze(0)
         area = (bbox[..., 2] - bbox[..., 0]) * (bbox[..., 3] - bbox[..., 1])

@@ -96,9 +96,11 @@ class Mask2CAD(nn.Module):
             V = rendered.shape[-4] // Q
             rendered_view_features = self.rendered_view_encoder(rendered.flatten(end_dim = -4)).unflatten(0, (B, Q, V))
         
-            target_object_rotation_bins, target_object_rotation_delta, target_center_delta = self.compute_rotation_location_targets(category_idx, bbox, object_location, object_rotation_quat = quat.from_matrix(targets['object_rotation']))
+            target_object_rotation_bins, target_object_rotation_mask, target_object_rotation_delta, target_center_delta = self.compute_rotation_location_targets(category_idx, bbox, object_location, object_rotation_quat = quat.from_matrix(targets['object_rotation']))
+            
             shape_embedding_loss = self.shape_embedding_loss(shape_embedding.unflatten(0, (B, Q)), rendered_view_features, category_idx = category_idx, shape_idx = shape_idx, P = P, N = N)
-            pose_classification_loss, pose_regression_loss, center_regression_loss = self.pose_estimation_loss(self.index_select_batched(object_rotation_bins.unflatten(0, (B, Q)), category_idx), self.index_select_batched(object_rotation_delta.unflatten(0, (B, Q)), category_idx), self.index_select_batched(center_delta.unflatten(0, (B, Q)), category_idx), target_object_rotation_bins, target_object_rotation_delta, target_center_delta)
+            
+            pose_classification_loss, pose_regression_loss, center_regression_loss = self.pose_estimation_loss(self.index_select_batched(object_rotation_bins.unflatten(0, (B, Q)), category_idx), self.index_select_batched(object_rotation_delta.unflatten(0, (B, Q)), category_idx), self.index_select_batched(center_delta.unflatten(0, (B, Q)), category_idx), target_object_rotation_bins, target_object_rotation_mask, target_object_rotation_delta, target_center_delta)
             
             return dict(shape_embedding = shape_embedding_loss, pose_classification = pose_classification_loss, pose_regression = pose_regression_loss, center_regression = center_regression_loss)
 
@@ -119,24 +121,26 @@ class Mask2CAD(nn.Module):
 
             return detections
     
-    def compute_rotation_location_targets(self, category_idx : 'BQ', bbox : 'BQ4', object_location : 'BQ3', object_rotation_quat : 'BQ4'):
+    def compute_rotation_location_targets(self, category_idx : 'BQ', bbox : 'BQ4', object_location : 'BQ3', object_rotation_quat : 'BQ4', theta = math.pi / 6):
         anchor_quat = self.object_rotation_quat[category_idx]
-        object_rotation_bins = quat.quatcdist(object_rotation_quat.unsqueeze(-2), anchor_quat).squeeze(-2).argmin(dim = -1)
-        
+        object_rotation_diff = quat.quatcdist(object_rotation_quat.unsqueeze(-2), anchor_quat).squeeze(-2)
+        object_rotation_angle, object_rotation_bins = object_rotation_diff.min(dim = -1)
+        object_rotation_mask = object_rotation_angle < theta
+
         # x * q = t => x = t * q ** -1
         object_rotation_delta = quat.quatprodinv(self.index_select_batched(anchor_quat, object_rotation_bins), object_rotation_quat)
 
         center_xy, width_height = self.xyxy_to_cxcywh(bbox).split(2, dim = -1)
         center_delta = (object_location[..., :2] - center_xy) / width_height
 
-        return object_rotation_bins, object_rotation_delta, center_delta
+        return object_rotation_bins, object_rotation_mask, object_rotation_delta, center_delta
 
     @staticmethod
-    def pose_estimation_loss(pred_object_rotation_bins, pred_object_rotation_delta, pred_center_delta, true_object_rotation_bins, true_object_rotation_delta, true_center_delta, delta = 0.15, theta = math.pi / 6):
+    def pose_estimation_loss(pred_object_rotation_bins, pred_object_rotation_delta, pred_center_delta, true_object_rotation_bins, true_object_rotation_mask, true_object_rotation_delta, true_center_delta, delta = 0.15):
         
         pose_classification_loss = F.cross_entropy(pred_object_rotation_bins.flatten(end_dim = -2), true_object_rotation_bins.flatten())
         
-        pose_regression_loss = F.huber_loss(pred_object_rotation_delta, true_object_rotation_delta, delta = delta)
+        pose_regression_loss = (F.huber_loss(pred_object_rotation_delta, true_object_rotation_delta, delta = delta, reduction = 'none').mean(dim = -1) * true_object_rotation_mask).sum() / true_object_rotation_mask.sum()
         
         center_regression_loss = F.huber_loss(pred_center_delta, true_center_delta, delta = delta)
 

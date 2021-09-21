@@ -70,7 +70,11 @@ def train_one_epoch(log, epoch, iteration, model, optimizer, data_loader, device
     model.train()
     for images, targets in metric_logger.log_every(data_loader, print_freq, header = 'Epoch: [{}]'.format(epoch)):
         images, targets = to_device(images, targets, device = args.device)
-        loss_dict = model(images, targets, mode = args.mode)
+        try:
+            
+            loss_dict = model(images, targets, mode = args.mode)
+        except:
+            breakpoint()
         loss_dict_reduced = utils.reduce_dict(loss_dict)
         loss = mix_losses(loss_dict, args.loss_weights) if args.mode == 'Mask2CAD' else sum(loss_dict.values())
 
@@ -153,6 +157,9 @@ def evaluate(log, epoch, iteration, model, data_loader, shape_data_loader, evalu
 def main(args):
     os.makedirs(args.output_path, exist_ok = True)
     utils.init_distributed_mode(args)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     log = open(args.log, 'w') if utils.is_main_process() else None
 
@@ -253,6 +260,7 @@ if __name__ == '__main__':
     parser.add_argument('--world-size', default=1, type=int, help='number of distributed processes')
     parser.add_argument('--dist-url', default='env://', help='url used to set up distributed training')
     parser.add_argument('--log', default='data/log.jsonl')
+    parser.add_argument('--seed', type = int, default = 42)
     
     parser.add_argument('--dataset-root', default = 'data/common/pix3d')
     parser.add_argument('--train-metadata-path', default = 'data/common/pix3d_splits/pix3d_s2_train.json')
