@@ -70,11 +70,7 @@ def train_one_epoch(log, epoch, iteration, model, optimizer, data_loader, device
     model.train()
     for images, targets in metric_logger.log_every(data_loader, print_freq, header = 'Epoch: [{}]'.format(epoch)):
         images, targets = to_device(images, targets, device = args.device)
-        try:
-            
-            loss_dict = model(images, targets, mode = args.mode)
-        except:
-            breakpoint()
+        loss_dict = model(images, targets, mode = args.mode)
         loss_dict_reduced = utils.reduce_dict(loss_dict)
         loss = mix_losses(loss_dict, args.loss_weights) if args.mode == 'Mask2CAD' else sum(loss_dict.values())
 
