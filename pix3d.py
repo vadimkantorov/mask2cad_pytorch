@@ -3,11 +3,10 @@ import json
 import collections
 import itertools
 
-import pycocotools.coco, pycocotools.mask    
-
 import torch
 import torchvision
 
+import pycocotools.coco, pycocotools.mask
 
 class Pix3d(torchvision.datasets.VisionDataset):
     categories           = ['BACKGROUND', 'bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
@@ -58,7 +57,7 @@ class Pix3d(torchvision.datasets.VisionDataset):
             image_id   = m['img'],
             shape_path = m['model'],
             mask_path  = m['mask'],
-            category   = m['category'], 
+            category   = m['category'],
             
             boxes = bbox, # xyxy
             area = area,
@@ -103,5 +102,6 @@ class Pix3d(torchvision.datasets.VisionDataset):
 
             ) for image_idx, m in enumerate(self.metadata)]
         )
+        assert all(isinstance(ann['segmentation'], dict) for ann in coco_dataset.dataset['annotations'])
         coco_dataset.createIndex()
         return coco_dataset

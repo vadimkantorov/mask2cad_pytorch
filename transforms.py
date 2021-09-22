@@ -16,7 +16,8 @@ import torchvision.transforms.transforms as T
 class MaskRCNNAugmentations(nn.Module):
     # https://detectron2.readthedocs.io/en/latest/modules/config.html#yaml-config-references
     # _C.INPUT.MIN_SIZE_TRAIN = (640, 672, 704, 736, 768, 800)
-    def __init__(self, p = 0.5, short_edge_length = (800,), max_size = 1333):
+    # short_edge_length = (800,), max_size = 1333
+    def __init__(self, p = 0.5, short_edge_length = 480, max_size = 640):
         super().__init__()
         # https://github.com/facebookresearch/detectron2/blob/main/configs/common/data/coco.py
         self.transforms = [ResizeShortestEdge(short_edge_length = short_edge_length, max_size = max_size), RandomHorizontalFlip(p = p)]
@@ -49,7 +50,7 @@ class ResizeShortestEdge(nn.Module):
 
     def forward(self, image, target):
         h, w = image.shape[-2:]
-        size = random.choice(self.short_edge_length)
+        size = self.short_edge_length
 
         scale = size * 1.0 / min(h, w)
         if h < w:
@@ -64,6 +65,7 @@ class ResizeShortestEdge(nn.Module):
         newh = int(newh + 0.5)
 
         image = F.interpolate(image.unsqueeze(0), (newh, neww), mode = self.interp, align_corners = None if self.interp == "nearest" else False).squeeze(0)
+        target['image_width_height_resized'] = (neww, hewh)
         if 'boxes' in target:
             target['boxes'][..., 0::2] *= neww / w
             target['boxes'][..., 1::2] *= newh / h

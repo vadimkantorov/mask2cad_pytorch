@@ -19,8 +19,8 @@ def create_aspect_ratio_groups(aspect_ratios, k=0):
     # count number of elements per group
     counts = torch.unique(groups, return_counts=True)[1]
     fbins = [0] + bins + [math.inf]
-    print("Using", fbins, "as bins for aspect ratio quantization")
-    print("Count of instances per bin:", counts)
+    print('Using', fbins, 'as bins for aspect ratio quantization')
+    print('Count of instances per bin:', counts)
     return groups
     
 
@@ -41,13 +41,16 @@ class RenderedViews(torchvision.datasets.VisionDataset):
         or_jpg = lambda path, ext = '.png': torchvision.io.read_image(path if os.path.exists(path) else path.replace(ext, '.jpg'))
         no_img = lambda idx: [k for k in idx if k > 0]
         # TODO: rerender to eliminate fixup
-        fixup = lambda path: path if os.path.exists(path) else os.path.join(os.path.dirname(os.path.dirname(path)), 'model.obj', os.path.basename(path))
+        fixup = lambda path: path #if os.path.exists(path) else os.path.join(os.path.dirname(os.path.dirname(path)), 'model.obj', os.path.basename(path))
         
         views = torch.stack([or_jpg(os.path.join(self.root, targets['image_id']) if k == 0 else fixup(os.path.join(view_dir, f'{k:04}' + self.ext))) for k in no_img(idx[1:])])
 
         targets['shape_views'] = views.expand(-1, 3, -1, -1) / 255.0
 
-        return images, targets 
+        return images, targets
+
+    def __len__(self):
+        return len(self.dataset)
 
 class RenderedViewsSequentialSampler(torch.utils.data.Sampler):
     def __init__(self, num_examples, num_rendered_views):
@@ -115,6 +118,8 @@ def collate_fn(batch):
         shape_path      = [b[1]['shape_path']                   for b in batch], 
         mask_path       = [b[1]['mask_path']                    for b in batch], 
         category        = [b[1]['category']                     for b in batch],
+        image_width_height = torch.tensor([b[1]['image_width_height']   for b in batch], dtype = torch.int16),
+        image_width_height_resized = torch.tensor([b[1].get('image_width_height_resized', b[1]['image_width_height']) for b in batch], dtype = torch.int16),
 
         num_boxes       = torch.tensor([len(b[1]['boxes'])      for b in batch]),
         boxes           = stack_jagged([b[1]['boxes']           for b in batch]),
@@ -125,8 +130,6 @@ def collate_fn(batch):
         object_rotation = stack_jagged([b[1]['object_rotation'] for b in batch]),
         shape_views     = stack_jagged([b[1]['shape_views']     for b in batch]) if 'shape_views' in batch[0][1] else None
     )
-    if images.shape[1] != 3:
-        breakpoint()
     return images, targets
 
 # https://github.com/pytorch/pytorch/issues/23430

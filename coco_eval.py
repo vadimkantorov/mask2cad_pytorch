@@ -8,10 +8,10 @@ import pycocotools.cocoeval, pycocotools.coco, pycocotools.mask
 import utils
 
 class CocoEvaluator(object):
-    def __init__(self, coco_gt, iou_types):
+    def __init__(self, cocoapi, iou_types):
         assert isinstance(iou_types, (list, tuple))
-        self.coco_gt = copy.deepcopy(coco_gt)
-        self.coco_eval = {iou_type : pycocotools.cocoeval.COCOeval(self.coco_gt, iouType=iou_type) for iou_type in iou_types}
+        self.cocoapi = cocoapi # copy.deepcopy(cocoapi) if not RLE
+        self.coco_eval = {iou_type : pycocotools.cocoeval.COCOeval(self.cocoapi, iouType = iou_type) for iou_type in iou_types}
         self.eval_imgs = {k: [] for k in iou_types}
         self.img_ids = []
 
@@ -21,7 +21,7 @@ class CocoEvaluator(object):
 
         for iou_type, coco_eval in self.coco_eval.items():
             results = self.prepare(predictions, iou_type)
-            coco_dt = self.coco_gt.loadRes(results) if results else pycocotools.coco.COCO()
+            coco_dt = self.cocoapi.loadRes(results) if results else pycocotools.coco.COCO()
 
             coco_eval.cocoDt = coco_dt
             coco_eval.params.imgIds = list(img_ids)
@@ -54,56 +54,23 @@ class CocoEvaluator(object):
 
     def prepare(self, predictions, iou_type):
         assert iou_type in ["bbox", "segm"]
-        if iou_type == "bbox":
-            return self.prepare_for_coco_detection(predictions)
-        elif iou_type == "segm":
-            return self.prepare_for_coco_segmentation(predictions)
-
-    def prepare_for_coco_detection(self, predictions):
+        
         coco_results = []
         for original_id, prediction in predictions.items():
             if len(prediction) == 0:
                 continue
-
-            scores = prediction["scores"].tolist()
-            labels = prediction["labels"].tolist()
-            boxes = self.xyxy_to_xywh(prediction["boxes"]).tolist()
-
-            coco_results.extend(
-                dict(
-                    image_id = original_id,
-                    category_id = labels[k],
-                    bbox = box,
-                    score = scores[k],
+        
+            if iou_type == "bbox":
+                coco_results.extend(
+                    dict(image_id = original_id, category_id = l, score = s, bbox = b)
+                    for s, l, b in zip(prediction["scores"].tolist(), prediction["labels"].tolist(), self.xyxy_to_xywh(prediction["boxes"]).tolist())
                 )
-                for k, box in enumerate(boxes)
-            )
-        return coco_results
-
-    def prepare_for_coco_segmentation(self, predictions):
-        coco_results = []
-        for original_id, prediction in predictions.items():
-            if len(prediction) == 0:
-                continue
-
-            scores = prediction["scores"].tolist()
-            labels = prediction["labels"].tolist()
-            masks = prediction["masks"] > 0.5
-
-            rles = [
-                dict(rle, counts = rle['counts'].decode('utf-8'))
-                for mask in masks for rle in [pycocotools.mask.encode(mask.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy())]
-            ]
-
-            coco_results.extend(
-                dict(
-                    image_id = original_id,
-                    category_id = labels[k],
-                    segmentation = rle,
-                    score = scores[k],
+            elif iou_type == "segm":
+                coco_results.extend(
+                    dict(image_id = original_id, category_id = l, score = s, segmentation = pycocotools.mask.encode(m.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy()))
+                    for s, l, m in zip(prediction["scores"].tolist(), prediction["labels"].tolist(), prediction["masks"] > 0.5)
                 )
-                for k, rle in enumerate(rles)
-            )
+
         return coco_results
 
     @staticmethod

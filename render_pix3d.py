@@ -10,12 +10,12 @@ import argparse
 import subprocess
 
 try:
-    import numpy as np, scipy.spatial 
+    import numpy as np
 except:
     subprocess.call([sys.executable, '-m', 'ensurepip'])
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'numpy', 'scipy'])
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'numpy'])
 finally:
-    import numpy as np, scipy.spatial
+    import numpy as np
 
 import bpy
 import mathutils
@@ -152,6 +152,9 @@ def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_b
             continue
 
         frame_dir = os.path.join(args.output_path, model_path)
+        print(frame_dir)
+        return
+
         os.makedirs(frame_dir, exist_ok = True)
 
         delete_mesh_objects()    

@@ -21,11 +21,11 @@ class ShapeRetrieval(nn.Module):
         pass
 
 class Mask2CAD(nn.Module):
-    def __init__(self, *, num_categories = 9, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, **kwargs_backbone):
+    def __init__(self, *, num_categories = 10, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, **kwargs_backbone):
         super().__init__()
         self.register_buffer('object_rotation_quat', object_rotation_quat)
         self.num_rotation_clusters = num_rotation_clusters
-        self.num_categories_with_bg = num_categories
+        self.num_categories = len(object_rotation_quat)
         self.num_detections_per_image = num_detections_per_image
         
         self.rendered_view_encoder = torchvision.models.resnet18(pretrained = False)
@@ -41,9 +41,9 @@ class Mask2CAD(nn.Module):
         conv_bn_relu = lambda in_channels = embedding_dim, out_channels = embedding_dim, kernel_size = 3: nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel_size = kernel_size, padding = kernel_size // 2), nn.BatchNorm2d(out_channels), nn.ReLU(True))
         
         self.shape_embedding_branch = nn.Sequential(*([conv_bn_relu() for k in range(3)] + [conv_bn_relu(embedding_dim, shape_embedding_dim), nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3)]))
-        self.pose_classification_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories_with_bg * self.num_rotation_clusters)]))
-        self.pose_refinement_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories_with_bg * 4)]))
-        self.center_regression_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories_with_bg * 2)]))
+        self.pose_classification_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories * self.num_rotation_clusters)]))
+        self.pose_refinement_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories * 4)]))
+        self.center_regression_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories * 2)]))
 
         self.reset_parameters()
 
@@ -56,7 +56,11 @@ class Mask2CAD(nn.Module):
         bbox, category_idx, masks, shape_idx, object_location, object_rotation_quat = map(targets.get, ['boxes', 'labels', 'masks', 'shape_idx', 'object_location', 'object_rotation_quat'])
         
         if mode == 'MaskRCNN':
-            return self.object_detector(images, [dict(labels = l, boxes = b, masks = m) for l, b, m in zip(category_idx, bbox, masks)])
+            detections = [dict(labels = l, boxes = b, masks = m) for l, b, m in zip(category_idx, bbox, masks)]
+            self.object_detector.eval()
+            breakpoint()
+            res = self.object_detector(images, detections)
+            return res
         
         # input / output boxes are xyxy
         if bbox is not None and category_idx is not None:
@@ -73,6 +77,8 @@ class Mask2CAD(nn.Module):
             box_scores = self.index_select_batched(scores, category_idx.flatten())
             mask_probs = self.index_select_batched(mask_logits, category_idx.flatten()).sigmoid()
             detections = [dict(boxes = b, labels = c, scores = s, masks = m) for b, c, s, m in zip(bbox, category_idx, box_scores.split(num_boxes), mask_probs.split(num_boxes))]
+            # box_coder.decode needed?
+            detections = self.object_detector.transform.postprocess(detections, images_nested.image_sizes, targets['image_width_height'].tolist())
 
         else:
             detections = self.object_detector(images)
@@ -84,9 +90,9 @@ class Mask2CAD(nn.Module):
         
         box_features = F.interpolate(box_features, mask_probs.shape[-2:]) * mask_probs.unsqueeze(-3)
         shape_embedding = self.shape_embedding_branch(box_features)
-        object_rotation_bins = self.pose_classification_branch(box_features).unflatten(-1, (self.num_categories_with_bg, self.num_rotation_clusters))
-        object_rotation_delta = self.pose_refinement_branch(box_features).unflatten(-1, (self.num_categories_with_bg, 4))
-        center_delta = self.center_regression_branch(box_features).unflatten(-1, (self.num_categories_with_bg, 2))
+        object_rotation_bins = self.pose_classification_branch(box_features).unflatten(-1, (self.num_categories, self.num_rotation_clusters))
+        object_rotation_delta = self.pose_refinement_branch(box_features).unflatten(-1, (self.num_categories, 4))
+        center_delta = self.center_regression_branch(box_features).unflatten(-1, (self.num_categories, 2))
         #object_rotation_bins, object_rotation_delta, center_delta = [self.index_select_batched(t, category_idx) for t in [object_rotation_bins, object_rotation_delta, center_delta]]
 
         if self.training:
@@ -109,6 +115,7 @@ class Mask2CAD(nn.Module):
             anchor_quat = self.index_select_batched(self.object_rotation_quat[category_idx], self.index_select_batched(object_rotation_bins.argmax(dim = -1), category_idx))
             object_rotation = quat.quatprod(anchor_quat, self.index_select_batched(object_rotation_delta, category_idx))
             center_xy, width_height = self.xyxy_to_cxcywh(bbox).split(2, dim = -1)
+            #TODO: what should be scale of center_xy?
             object_location = center_xy + self.index_select_batched(center_delta, category_idx) * width_height
             num_boxes = [len(d['boxes']) for d in detections]
             image_id = targets['image_id'] if targets else [None] * len(images)

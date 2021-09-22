@@ -10,10 +10,10 @@ import torch.nn.functional as F
 import pytorch3d.io, pytorch3d.structures, pytorch3d.utils, pytorch3d.ops 
 
 class Pix3dEvaluator(dict):
-    def __init__(self, dataset):
+    def __init__(self, dataset, cocoapi):
         self.dataset = dataset
+        self.cocoapi = cocoapi
         self.mesh_cache = None
-        self.cocoapi = dataset.as_coco_dataset()
         self.npos = dataset.num_by_category
         self.image_root = self.dataset.root
         self.categories = self.dataset.categories
