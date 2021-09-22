@@ -173,11 +173,9 @@ def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_b
             bpy.ops.render.render(write_still = True)
 
             bpy.context.scene.frame_set(1 + bpy.context.scene.frame_current)
-
             print(frame_path)
         
-        print('FRAME_DIR', frame_dir)
-        return
+        print(frame_dir)
 
 
 if __name__ == '__main__':
