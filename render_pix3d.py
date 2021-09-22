@@ -151,10 +151,6 @@ def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_b
         if args.category and category not in args.category:
             continue
 
-        frame_dir = os.path.join(args.output_path, model_path)
-        print(frame_dir)
-        return
-
         os.makedirs(frame_dir, exist_ok = True)
 
         delete_mesh_objects()    
@@ -178,6 +174,11 @@ def render_synthetic_views(metadata, args, color_mode, color_repth, viewpoints_b
             bpy.context.scene.frame_set(1 + bpy.context.scene.frame_current)
 
             print(frame_path)
+        
+        frame_dir = os.path.join(args.output_path, model_path)
+        print('FRAME_DIR', frame_dir)
+        return
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
