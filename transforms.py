@@ -1,3 +1,4 @@
+import math
 import random
 import torch
 import torchvision
@@ -17,11 +18,10 @@ class MaskRCNNAugmentations(nn.Module):
     # https://detectron2.readthedocs.io/en/latest/modules/config.html#yaml-config-references
     # _C.INPUT.MIN_SIZE_TRAIN = (640, 672, 704, 736, 768, 800)
     # short_edge_length = (800,), max_size = 1333
-    def __init__(self, p = 0.5, short_edge_length = 480, max_size = 640):
+    def __init__(self, p = 0.5, short_edge_length = 480, max_size = 640, noise_scale = 0.025):
         super().__init__()
         # https://github.com/facebookresearch/detectron2/blob/main/configs/common/data/coco.py
-        self.transforms = [ResizeShortestEdge(short_edge_length = short_edge_length, max_size = max_size), RandomHorizontalFlip(p = p)]
-        # L(T.ResizeShortestEdge)(short_edge_length=800, max_size=1333),
+        self.transforms = nn.ModuleList([ResizeShortestEdge(short_edge_length = short_edge_length, max_size = max_size), JitterBoxes(noise_scale = noise_scale), RandomHorizontalFlip(p = p)])
 
     def forward(self, image, target):
         for t in self.transforms:
@@ -31,11 +31,25 @@ class MaskRCNNAugmentations(nn.Module):
 class Mask2CADAugmentations(nn.Module):
     def __init__(self, shape_view_side_size = 128):
         super().__init__()
-        self.shape_view_transforms = [RandomPhotometricDistort(), T.RandomCrop(shape_view_side_size)]
+        self.shape_view_transforms = nn.ModuleList([RandomPhotometricDistort(), T.RandomCrop(shape_view_side_size)])
 
     def forward(self, image, target):
         for t in self.shape_view_transforms:
             target['shape_views'] = t(target['shape_views'])
+        return image, target
+
+class JitterBoxes(nn.Module):
+    def __init__(self, noise_scale = 0.025):
+        super().__init__()
+        self.noise_scale = noise_scale
+
+    def forward(self, image, target):
+        xmin, ymin, xmax, ymax = target['boxes'].unbind(dim = -1)
+        xm, ym, xp, yp = (xmax - xmin), (ymax - ymin), (xmin + xmax), (ymin + ymax)
+        j = torch.randn_like(boxes) * noise_scale
+        new_cx, new_cy, new_w_half, new_h_half = (xp / 2.0 + j[..., 0] * w), (yp / 2.0 + j[..., 1] * h), 0.5 * xm * j[..., 2].exp(), 0.5 * ym * j[..., 3].exp()
+        new_boxes = torch.stack([new_cx - new_w_half, new_cy - new_h_half, new_cx + new_w_half, new_cy + new_h_half], dim = -1)
+        target['boxes'] = new_boxes
         return image, target
 
 class ResizeShortestEdge(nn.Module):

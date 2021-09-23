@@ -78,7 +78,7 @@ def train_one_epoch(log, tensorboard, epoch, iteration, model, optimizer, train_
         if utils.is_main_process():
             metric_logger.update(loss = float(mix_losses(loss_dict_reduced, args.loss_weights)), lr = optimizer.param_groups[0]['lr'], **loss_dict_reduced)
             log.write(json.dumps(dict(epoch = epoch, iteration = iteration, **metric_logger.last)) + '\n')
-            #tensorboard.summary_writer.add_scalars(name, value, iteration)
+            #tensorboard.add_scalars(name, value, iteration)
         iteration += 1
 
     return iteration
@@ -106,6 +106,7 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
         shape_idx_, shape_path_ = shape_idx[idx], [shape_path[i[0]] for i in idx.tolist()]
         for d, s in zip(detections, split_list(shape_path_, num_boxes)):
             d['shape_path'] = s
+            d['segmentation'] = pix3d.mask_to_rle(d['masks'] > 0.5)
 
         toc_model = time.time() - tic
         detections = from_device(detections)
@@ -114,14 +115,14 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
         true_shape_idx.extend(targets['shape_idx'])
         pred_category_idx.extend(d['labels'] for d in detections)
         true_category_idx.extend(targets['labels'])
-
+    
         tic = time.time()
-        breakpoint()
-        evaluator_detection.update({ d['image_id']: dict(d, masks = d['masks']  ) for d in detections })
+        
+        evaluator_detection.update({ d['image_id']: d for d in detections })
         toc_evaluator_detection = time.time() - tic
         
         tic = time.time()
-        evaluator_mesh.update({ d['image_id'] : dict(instances = dict(scores = d['scores'], pred_boxes = d['boxes'], pred_classes = d['labels'], pred_masks = d['masks'], pred_meshes = d['shape_path'])) for d in detections })
+        evaluator_mesh.update({ d['image_id'] : dict(instances = dict(scores = d['scores'], pred_boxes = d['boxes'], pred_classes = d['labels'], pred_masks_rle = d['segmentation'], pred_meshes = d['shape_path'])) for d in detections })
         toc_evaluator_mesh = time.time() - tic
 
         metric_logger.update(time_model = toc_model, time_evaluator_detection = toc_evaluator_detection, time_evaluator_mesh = toc_evaluator_mesh)

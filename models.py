@@ -52,7 +52,7 @@ class Mask2CAD(nn.Module):
         self.pose_refinement_branch[-1].bias.zero_()
         self.pose_refinement_branch[-1].bias[3::4] = quat_fill # xyzw
 
-    def forward(self, images, targets, mode = None, P = 4, N = 8):
+    def forward(self, images, targets, mode = None, Pfactor = 4, Nfactor = 8): # 4, 16
         bbox, category_idx, masks, shape_idx, object_location, object_rotation_quat = map(targets.get, ['boxes', 'labels', 'masks', 'shape_idx', 'object_location', 'object_rotation_quat'])
         
         if mode == 'MaskRCNN':
@@ -65,7 +65,8 @@ class Mask2CAD(nn.Module):
         # input / output boxes are xyxy
         if bbox is not None and category_idx is not None:
             num_boxes = [bbox.shape[1]] * len(bbox)
-            images_nested = self.object_detector.transform(images)[0]
+            #images_nested = self.object_detector.transform(images)[0]
+            images_nested = torchvision.models.detection.image_list.ImageList(self.object_detector.transform.normalize(images), targets['image_width_height_resized'].tolist())
             img_features = self.object_detector.backbone(images_nested.tensors)
             box_features = self.object_detector.roi_heads.box_roi_pool(img_features, bbox.unbind(), images_nested.image_sizes)
             class_logits, box_regression = self.object_detector.roi_heads.box_predictor(self.object_detector.roi_heads.box_head(box_features))
@@ -77,7 +78,6 @@ class Mask2CAD(nn.Module):
             box_scores = self.index_select_batched(scores, category_idx.flatten())
             mask_probs = self.index_select_batched(mask_logits, category_idx.flatten()).sigmoid()
             detections = [dict(boxes = b, labels = c, scores = s, masks = m) for b, c, s, m in zip(bbox, category_idx, box_scores.split(num_boxes), mask_probs.split(num_boxes))]
-            # box_coder.decode needed?
             detections = self.object_detector.transform.postprocess(detections, images_nested.image_sizes, targets['image_width_height'].tolist())
 
         else:
@@ -104,7 +104,7 @@ class Mask2CAD(nn.Module):
         
             target_object_rotation_bins, target_object_rotation_mask, target_object_rotation_delta, target_center_delta = self.compute_rotation_location_targets(category_idx, bbox, object_location, object_rotation_quat = quat.from_matrix(targets['object_rotation']))
             
-            shape_embedding_loss = self.shape_embedding_loss(shape_embedding.unflatten(0, (B, Q)), rendered_view_features, category_idx = category_idx, shape_idx = shape_idx, P = P, N = N)
+            shape_embedding_loss = self.shape_embedding_loss(shape_embedding.unflatten(0, (B, Q)), rendered_view_features, category_idx = category_idx, shape_idx = shape_idx, P = Pfactor * Q, N = Nfactor * Q)
             
             pose_classification_loss, pose_regression_loss, center_regression_loss = self.pose_estimation_loss(self.index_select_batched(object_rotation_bins.unflatten(0, (B, Q)), category_idx), self.index_select_batched(object_rotation_delta.unflatten(0, (B, Q)), category_idx), self.index_select_batched(center_delta.unflatten(0, (B, Q)), category_idx), target_object_rotation_bins, target_object_rotation_mask, target_object_rotation_delta, target_center_delta)
             

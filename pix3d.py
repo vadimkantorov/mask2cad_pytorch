@@ -8,6 +8,10 @@ import torchvision
 
 import pycocotools.coco, pycocotools.mask
 
+def mask_to_rle(mask):
+    assert mask.ndim == 2 or mask.ndim == 3
+    return pycocotools.mask.encode(mask.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy()) if mask.ndim == 2 else list(map(mask_to_rle, mask))
+
 class Pix3d(torchvision.datasets.VisionDataset):
     categories           = ['BACKGROUND', 'bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
     categories_coco_inds = [0,            65   , -1        , 63      , -1   , -1    ,  63   , 67     , -1    ,  -1       ]
@@ -92,7 +96,7 @@ class Pix3d(torchvision.datasets.VisionDataset):
                 iscrowd = 0, 
                 area = (m['bbox'][2] - m['bbox'][0]) * (m['bbox'][3] - m['bbox'][1]), 
                 category_id = self.category_idx[m['category']], 
-                segmentation = pycocotools.mask.encode( torchvision.io.read_image(os.path.join(self.root, m['mask']))[0].eq(255).to(torch.uint8).t().contiguous().t().numpy() ),
+                segmentation = mask_to_rle(torchvision.io.read_image(os.path.join(self.root, m['mask']))[0] == 255),
 
                 rot_mat = m['rot_mat'], 
                 trans_mat = m['trans_mat'],

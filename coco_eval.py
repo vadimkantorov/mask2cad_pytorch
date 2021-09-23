@@ -67,8 +67,8 @@ class CocoEvaluator(object):
                 )
             elif iou_type == "segm":
                 coco_results.extend(
-                    dict(image_id = original_id, category_id = l, score = s, segmentation = pycocotools.mask.encode(m.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy()))
-                    for s, l, m in zip(prediction["scores"].tolist(), prediction["labels"].tolist(), prediction["masks"] > 0.5)
+                    dict(image_id = original_id, category_id = l, score = s, segmentation = r)
+                    for s, l, m in zip(prediction["scores"].tolist(), prediction["labels"].tolist(), prediction["rle"])
                 )
 
         return coco_results
