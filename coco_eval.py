@@ -1,9 +1,12 @@
-import numpy as np
+import io
 import copy
 import time
-import torch
+import contextlib
 
 import pycocotools.cocoeval, pycocotools.coco, pycocotools.mask 
+
+import numpy as np
+import torch
 
 import utils
 
@@ -47,29 +50,29 @@ class CocoEvaluator(object):
             coco_eval._paramsEval = copy.deepcopy(coco_eval.params)
 
     def evaluate(self):
+        stats = {}
         for iou_type, coco_eval in self.coco_eval.items():
             print("IoU metric:", iou_type)
             coco_eval.accumulate()
-            coco_eval.summarize()
+            with contextlib.redirect_stdout(io.StringIO()) as f:
+                coco_eval.summarize()
+
+            stats[iou_type] = list(zip(coco_eval.stats.tolist(), f.getvalue().strip().split('\n')))
+        return stats
+
 
     def prepare(self, predictions, iou_type):
         assert iou_type in ["bbox", "segm"]
         
         coco_results = []
-        for original_id, prediction in predictions.items():
-            if len(prediction) == 0:
+        for image_id, p in predictions.items():
+            if not p:
                 continue
         
             if iou_type == "bbox":
-                coco_results.extend(
-                    dict(image_id = original_id, category_id = l, score = s, bbox = b)
-                    for s, l, b in zip(prediction["scores"].tolist(), prediction["labels"].tolist(), self.xyxy_to_xywh(prediction["boxes"]).tolist())
-                )
+                coco_results.extend(dict(image_id = image_id, category_id = l, score = s, bbox = b) for s, l, b in zip(p["scores"].tolist(), p["labels"].tolist(), self.xyxy_to_xywh(p["boxes"]).tolist()))
             elif iou_type == "segm":
-                coco_results.extend(
-                    dict(image_id = original_id, category_id = l, score = s, segmentation = r)
-                    for s, l, m in zip(prediction["scores"].tolist(), prediction["labels"].tolist(), prediction["rle"])
-                )
+                coco_results.extend(dict(image_id = image_id, category_id = l, score = s, segmentation = m) for s, l, m in zip(p["scores"].tolist(), p["labels"].tolist(), p["segmentation"]))
 
         return coco_results
 

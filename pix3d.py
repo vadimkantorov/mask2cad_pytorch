@@ -10,7 +10,7 @@ import pycocotools.coco, pycocotools.mask
 
 def mask_to_rle(mask):
     assert mask.ndim == 2 or mask.ndim == 3
-    return pycocotools.mask.encode(mask.to(torch.uint8).t().contiguous().t().unsqueeze(-1).numpy()) if mask.ndim == 2 else list(map(mask_to_rle, mask))
+    return pycocotools.mask.encode(mask.to(torch.uint8).t().contiguous().t().numpy()) if mask.ndim == 2 else list(map(mask_to_rle, mask))
 
 class Pix3d(torchvision.datasets.VisionDataset):
     categories           = ['BACKGROUND', 'bed', 'bookcase', 'chair', 'desk', 'misc', 'sofa', 'table', 'tool', 'wardrobe']
@@ -87,7 +87,7 @@ class Pix3d(torchvision.datasets.VisionDataset):
         # annotation IDs need to start at 1, not 0, see https://github.com/pytorch/vision/issues/1530
         coco_dataset = pycocotools.coco.COCO()
         coco_dataset.dataset = dict(
-            images = [dict(id = m['img'], height = m['img_size'][1], width = m['img_size'][0]) for m in self.metadata], 
+            images = [dict(id = m['img'], file_name = m['img'], height = m['img_size'][1], width = m['img_size'][0]) for m in self.metadata], 
             categories = [dict(id = category_idx, name = category) for category_idx, category in enumerate(self.categories) if category_idx >= 1], 
             annotations = [dict(
                 id = 1 + image_idx, 

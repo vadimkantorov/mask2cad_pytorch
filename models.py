@@ -58,7 +58,6 @@ class Mask2CAD(nn.Module):
         if mode == 'MaskRCNN':
             detections = [dict(labels = l, boxes = b, masks = m) for l, b, m in zip(category_idx, bbox, masks)]
             self.object_detector.eval()
-            breakpoint()
             res = self.object_detector(images, detections)
             return res
         
@@ -77,7 +76,7 @@ class Mask2CAD(nn.Module):
             
             box_scores = self.index_select_batched(scores, category_idx.flatten())
             mask_probs = self.index_select_batched(mask_logits, category_idx.flatten()).sigmoid()
-            detections = [dict(boxes = b, labels = c, scores = s, masks = m) for b, c, s, m in zip(bbox, category_idx, box_scores.split(num_boxes), mask_probs.split(num_boxes))]
+            detections = [dict(boxes = b, labels = c, scores = s, masks = m.unsqueeze(-3)) for b, c, s, m in zip(bbox, category_idx, box_scores.split(num_boxes), mask_probs.split(num_boxes))]
             detections = self.object_detector.transform.postprocess(detections, images_nested.image_sizes, targets['image_width_height'].tolist())
 
         else:

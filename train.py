@@ -49,7 +49,7 @@ def mix_losses(loss_dict, loss_weights):
        
 def recall(pred_idx, true_idx, K = 1):
     true_idx = true_idx.unsqueeze(-1) if true_idx.ndim < pred_idx.ndim else true_idx 
-    assert pred_idx.shape == true_idx.shape
+    assert pred_idx.ndim == true_idx.ndim
     return (pred_idx == true_idx).any(dim = -1).float().mean()
 
 def LinearLR(optimizer, start_factor, total_iters):
@@ -104,9 +104,10 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
 
         idx = F.normalize(torch.cat([d['shape_embedding'] for d in detections]), dim = -1).matmul(shape_embedding.t()).topk(K, dim = -1, largest = True).indices.cpu()
         shape_idx_, shape_path_ = shape_idx[idx], [shape_path[i[0]] for i in idx.tolist()]
-        for d, s in zip(detections, split_list(shape_path_, num_boxes)):
+        for i, d, s in zip(targets['image_id'], detections, split_list(shape_path_, num_boxes)):
+            #d['image_id'] = i
             d['shape_path'] = s
-            d['segmentation'] = pix3d.mask_to_rle(d['masks'] > 0.5)
+            d['segmentation'] = pix3d.mask_to_rle(d['masks'].squeeze(-3) > 0.5)
 
         toc_model = time.time() - tic
         detections = from_device(detections)
@@ -122,7 +123,7 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
         toc_evaluator_detection = time.time() - tic
         
         tic = time.time()
-        evaluator_mesh.update({ d['image_id'] : dict(instances = dict(scores = d['scores'], pred_boxes = d['boxes'], pred_classes = d['labels'], pred_masks_rle = d['segmentation'], pred_meshes = d['shape_path'])) for d in detections })
+        evaluator_mesh.update({ d['image_id'] : dict(image_id = d['image_id'], instances = dict(scores = d['scores'], pred_boxes = d['boxes'], pred_classes = d['labels'], pred_masks_rle = d['segmentation'], pred_meshes = d['shape_path'])) for d in detections })
         toc_evaluator_mesh = time.time() - tic
 
         metric_logger.update(time_model = toc_model, time_evaluator_detection = toc_evaluator_detection, time_evaluator_mesh = toc_evaluator_mesh)
@@ -131,13 +132,13 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
     if args.distributed:
         for obj in [pred_shape_ids, true_shape_idx, pred_category_idx, true_category_idx, metric_logger, evaluator_detection, evaluator_mesh]:
             obj.synchronize_between_processes()
-    breakpoint()
     print('Averaged stats:', metric_logger)
     if utils.is_main_process():
-        recall_shape = recall(pred_shape_idx.cat(), true_shape_idx.cat(), K = 5)
-        recall_category = recall(pred_category_idx.cat(), true_category_idx.cat(), K = 1)
+        recall_shape = float(recall(pred_shape_idx.cat(), true_shape_idx.cat(), K = 5))
+        recall_category = float(recall(pred_category_idx.cat(), true_category_idx.cat(), K = 1))
         detection_res = evaluator_detection.evaluate()
         mesh_res = evaluator_mesh.evaluate()
+        breakpoint()
         line = json.dumps(dict(epoch = epoch, iteration = iteration, recall_shape = recall_shape, recall_category = recall_category, detection_res = detection_res, mesh_res = mesh_res))
         print(line)
         log.write(line + '\n')
