@@ -138,7 +138,6 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
         recall_category = float(recall(pred_category_idx.cat(), true_category_idx.cat(), K = 1))
         detection_res = evaluator_detection.evaluate()
         mesh_res = evaluator_mesh.evaluate()
-        breakpoint()
         line = json.dumps(dict(epoch = epoch, iteration = iteration, recall_shape = recall_shape, recall_category = recall_category, detection_res = detection_res, mesh_res = mesh_res))
         print(line)
         log.write(line + '\n')
