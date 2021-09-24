@@ -141,6 +141,8 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
         line = json.dumps(dict(epoch = epoch, iteration = iteration, recall_shape = recall_shape, recall_category = recall_category, detection_res = detection_res, mesh_res = mesh_res))
         print(line)
         log.write(line + '\n')
+        log.flush()
+        tensorboard.flush()
 
 def main(args):
     os.makedirs(args.output_path, exist_ok = True)
