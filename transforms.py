@@ -7,34 +7,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms.transforms as T
 
-#scale_factor = min(self.target_image_size[0] / img.shape[-1], self.target_image_size[1] / img.shape[-2])
-#img = F.interpolate(img.unsqueeze(0), self.target_image_size).squeeze(0) if img.numel() > 0 else torch.empty((0, self.target_image_size[1], self.target_image_size[0]), dtype = torch.uint8)
-#mask = F.interpolate(mask.unsqueeze(0), self.target_image_size).squeeze(0) if mask.numel() > 0 else torch.empty((0, self.target_image_size[1], self.target_image_size[0]), dtype = torch.uint8)
-##img = F.interpolate(img.unsqueeze(0), scale_factor = scale_factor).squeeze(0)
-##mask = F.interpolate(img.unsqueeze(0), scale_factor = scale_factor).squeeze(0)
-#bbox = [bbox[0] * scale_factor, bbox[1] * scale_factor, bbox[2] * scale_factor, bbox[3] * scale_factor]
-
-class MaskRCNNAugmentations(nn.Module):
+class MaskRCNNAugmentations(nn.Sequential):
     # https://detectron2.readthedocs.io/en/latest/modules/config.html#yaml-config-references
     # _C.INPUT.MIN_SIZE_TRAIN = (640, 672, 704, 736, 768, 800)
     # short_edge_length = (800,), max_size = 1333
     def __init__(self, p = 0.5, short_edge_length = 480, max_size = 640, noise_scale = 0.025):
-        super().__init__()
         # https://github.com/facebookresearch/detectron2/blob/main/configs/common/data/coco.py
-        self.transforms = nn.ModuleList([ResizeShortestEdge(short_edge_length = short_edge_length, max_size = max_size), JitterBoxes(noise_scale = noise_scale), RandomHorizontalFlip(p = p)])
+        super().__init__(ResizeShortestEdge(short_edge_length = short_edge_length, max_size = max_size), JitterBoxes(noise_scale = noise_scale), RandomHorizontalFlip(p = p))
 
     def forward(self, image, target):
-        for t in self.transforms:
+        for t in self:
             image, target = t(image, target)
         return image, target
 
-class Mask2CADAugmentations(nn.Module):
+class Mask2CADAugmentations(nn.Sequential):
     def __init__(self, shape_view_side_size = 128):
-        super().__init__()
-        self.shape_view_transforms = nn.ModuleList([RandomPhotometricDistort(), T.RandomCrop(shape_view_side_size)])
+        super().__init__(RandomPhotometricDistort(), T.RandomCrop(shape_view_side_size))
 
     def forward(self, image, target):
-        for t in self.shape_view_transforms:
+        for t in self:
             target['shape_views'] = t(target['shape_views'])
         return image, target
 

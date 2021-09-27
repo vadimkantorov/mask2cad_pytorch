@@ -29,23 +29,14 @@ import pix3d
 import pix3d_eval
 import coco_eval 
 
-def detach_cpu(tensor):
-    return tensor.detach().cpu()
+detach_cpu = lambda tensor: tensor.detach().cpu()
+to_device = lambda images, targets, device: (images.to(device), {k: v.to(device) if torch.is_tensor(v) else v for k, v in targets.items()})
+from_device = lambda outputs: [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
+mix_losses = lambda loss_dict, loss_weights: sum(loss_dict[k] * loss_weights.get(k, 1.0) for k in loss_dict)
 
 def split_list(l, n):
     cumsum = torch.tensor(n).cumsum(dim = -1).tolist()
     return [l[(cumsum[i - 1] if i >= 1 else 0) : cumsum[i]] for i in range(len(cumsum))]
-
-def to_device(images, targets, device):
-    images = images.to(device) 
-    targets = {k: v.to(device) if torch.is_tensor(v) else v for k, v in targets.items()}
-    return images, targets
-
-def from_device(outputs):
-    return [{k: v.cpu() if torch.is_tensor(v) else v for k, v in t.items()} for t in outputs]
-
-def mix_losses(loss_dict, loss_weights):
-    return sum(loss_dict[k] * loss_weights.get(k, 1.0) for k in loss_dict)
        
 def recall(pred_idx, true_idx, K = 1):
     true_idx = true_idx.unsqueeze(-1) if true_idx.ndim < pred_idx.ndim else true_idx 
@@ -78,7 +69,7 @@ def train_one_epoch(log, tensorboard, epoch, iteration, model, optimizer, train_
         if utils.is_main_process():
             metric_logger.update(loss = float(mix_losses(loss_dict_reduced, args.loss_weights)), lr = optimizer.param_groups[0]['lr'], **loss_dict_reduced)
             log.write(json.dumps(dict(epoch = epoch, iteration = iteration, **metric_logger.last)) + '\n')
-            #tensorboard.add_scalars(name, value, iteration)
+            #tensorboard.add_scalars('', value, iteration)
         iteration += 1
 
     return iteration
@@ -104,8 +95,7 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
 
         idx = F.normalize(torch.cat([d['shape_embedding'] for d in detections]), dim = -1).matmul(shape_embedding.t()).topk(K, dim = -1, largest = True).indices.cpu()
         shape_idx_, shape_path_ = shape_idx[idx], [shape_path[i[0]] for i in idx.tolist()]
-        for i, d, s in zip(targets['image_id'], detections, split_list(shape_path_, num_boxes)):
-            #d['image_id'] = i
+        for d, s in zip(detections, split_list(shape_path_, num_boxes)):
             d['shape_path'] = s
             d['segmentation'] = pix3d.mask_to_rle(d['masks'].squeeze(-3) > 0.5)
 
@@ -140,8 +130,9 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
         mesh_res = evaluator_mesh.evaluate()
         line = json.dumps(dict(epoch = epoch, iteration = iteration, recall_shape = recall_shape, recall_category = recall_category, detection_res = detection_res, mesh_res = mesh_res))
         print(line)
-        log.write(line + '\n')
+        print(line, file = log)
         log.flush()
+        tensorboard.add_scalars('evaluate', value, iteration)
         tensorboard.flush()
 
 def main(args):
