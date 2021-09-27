@@ -132,7 +132,7 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
         print(line)
         print(line, file = log)
         log.flush()
-        tensorboard.add_scalars('evaluate', value, iteration)
+        tensorboard.add_scalars('evaluate', dict(recall_shape = recall_shape, recall_category = recall_category), iteration)
         tensorboard.flush()
 
 def main(args):
