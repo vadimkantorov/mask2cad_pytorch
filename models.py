@@ -42,8 +42,8 @@ class Mask2CAD(nn.Module):
         
         self.shape_embedding_branch = nn.Sequential(*([conv_bn_relu() for k in range(3)] + [conv_bn_relu(embedding_dim, shape_embedding_dim), nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3)]))
         self.pose_classification_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories * self.num_rotation_clusters)]))
-        self.pose_refinement_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories * 4)]))
-        self.center_regression_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories * 2)]))
+        self.pose_refinement_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories * self.num_rotation_clusters * 4)]))
+        self.center_regression_branch = nn.Sequential(*([conv_bn_relu() for k in range(4)] + [nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim = -3), nn.Linear(embedding_dim, self.num_categories * self.num_rotation_clusters * 2)]))
 
         self.reset_parameters()
 
@@ -78,6 +78,7 @@ class Mask2CAD(nn.Module):
             mask_probs = self.index_select_batched(mask_logits, category_idx.flatten()).sigmoid()
             detections = [dict(boxes = b, labels = c, scores = s, masks = m.unsqueeze(-3)) for b, c, s, m in zip(bbox, category_idx, box_scores.split(num_boxes), mask_probs.split(num_boxes))]
             detections = self.object_detector.transform.postprocess(detections, images_nested.image_sizes, targets['image_width_height'].tolist())
+            bbox = bbox.flatten(end_dim = -2)
 
         else:
             detections = self.object_detector(images)
@@ -90,8 +91,8 @@ class Mask2CAD(nn.Module):
         box_features = F.interpolate(box_features, mask_probs.shape[-2:]) * mask_probs.unsqueeze(-3)
         shape_embedding = self.shape_embedding_branch(box_features)
         object_rotation_bins = self.pose_classification_branch(box_features).unflatten(-1, (self.num_categories, self.num_rotation_clusters))
-        object_rotation_delta = self.pose_refinement_branch(box_features).unflatten(-1, (self.num_categories, 4))
-        center_delta = self.center_regression_branch(box_features).unflatten(-1, (self.num_categories, 2))
+        object_rotation_delta = self.pose_refinement_branch(box_features).unflatten(-1, (self.num_categories, self.num_rotation_clusters, 4))
+        center_delta = self.center_regression_branch(box_features).unflatten(-1, (self.num_categories, self.num_rotation_clusters, 2))
         #object_rotation_bins, object_rotation_delta, center_delta = [self.index_select_batched(t, category_idx) for t in [object_rotation_bins, object_rotation_delta, center_delta]]
 
         if self.training:
@@ -111,11 +112,11 @@ class Mask2CAD(nn.Module):
 
         else:
             category_idx = category_idx.flatten()
-            anchor_quat = self.index_select_batched(self.object_rotation_quat[category_idx], self.index_select_batched(object_rotation_bins.argmax(dim = -1), category_idx))
-            object_rotation = quat.quatprod(anchor_quat, self.index_select_batched(object_rotation_delta, category_idx))
+            I = self.index_select_batched(object_rotation_bins.argmax(dim = -1), category_idx)
+            anchor_quat = self.index_select_batched(self.object_rotation_quat[category_idx], I)
+            object_rotation = quat.quatprod(anchor_quat, self.index_select_batched(object_rotation_delta, category_idx, I))
             center_xy, width_height = self.xyxy_to_cxcywh(bbox).split(2, dim = -1)
-            #TODO: what should be scale of center_xy?
-            object_location = center_xy + self.index_select_batched(center_delta, category_idx) * width_height
+            object_location = center_xy + self.index_select_batched(center_delta, category_idx, I) * width_height
             num_boxes = [len(d['boxes']) for d in detections]
             image_id = targets['image_id'] if targets else [None] * len(images)
 
@@ -174,8 +175,10 @@ class Mask2CAD(nn.Module):
         return torch.stack([center_x, center_y, width, height], dim = -1)
 
     @staticmethod
-    def index_select_batched(tensor, I):
-        return tensor.gather(I.ndim, I[(...,) + (None,) * (tensor.ndim - I.ndim)].expand((-1,) * (I.ndim + 1) + tensor.shape[I.ndim + 1:])).squeeze(I.ndim)
+    def index_select_batched(tensor, *args):
+        for I in args:
+            tensor = tensor.gather(I.ndim, I[(...,) + (None,) * (tensor.ndim - I.ndim)].expand((-1,) * (I.ndim + 1) + tensor.shape[I.ndim + 1:])).squeeze(I.ndim)
+        return tensor
         
 
 class CacheInputOutput(nn.Module):

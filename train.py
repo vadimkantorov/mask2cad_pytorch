@@ -214,6 +214,7 @@ def main(args):
         args.start_epoch = checkpoint['epoch'] + 1
 
     if args.evaluate_only:
+        assert args.mode == 'Mask2CAD'
         return evaluate(log, tensorboard, args.start_epoch, 0, model, val_data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device=args.device)
 
     tic = time.time()
