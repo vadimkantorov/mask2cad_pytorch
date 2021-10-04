@@ -69,7 +69,7 @@ class Pix3d(torchvision.datasets.VisionDataset):
             labels = labels,
             masks = masks, 
 
-            image_width_height = (width, height),
+            image_height_width = (height, width),
             shape_idx = shape_idx,
             object_location = object_location,
             object_rotation = object_rotation

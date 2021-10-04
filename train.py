@@ -252,7 +252,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--model', default='maskrcnn_resnet50_fpn')
     parser.add_argument('--device', default='cpu', help='device')
-    parser.add_argument('--train-batch-size', default=2, type=int, help='images per gpu, the total batch size is $NGPU x batch_size')
+    parser.add_argument('--train-batch-size', default = 2, type=int, help='images per gpu, the total batch size is $NGPU x batch_size')
     parser.add_argument('--val-batch-size', type = int, default = 1)
     parser.add_argument('--shape-batch-size', type = int, default = 1)
     parser.add_argument('--num-epochs', type = int, default = 1000)

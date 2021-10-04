@@ -30,6 +30,7 @@ class Mask2CADAugmentations(nn.Sequential):
         return image, target
 
 class JitterBoxes(nn.Module):
+    # https://github.com/tensorflow/tpu/blob/master/models/official/detection/utils/box_utils.py
     def __init__(self, noise_scale = 0.025):
         super().__init__()
         self.noise_scale = noise_scale
@@ -70,7 +71,7 @@ class ResizeShortestEdge(nn.Module):
         newh = int(newh + 0.5)
 
         image = F.interpolate(image.unsqueeze(0), (newh, neww), mode = self.interp, align_corners = None if self.interp == "nearest" else False).squeeze(0)
-        target['image_width_height_resized'] = (neww, hewh)
+        target['image_height_width_resized'] = (newh, neww)
         if 'boxes' in target:
             target['boxes'][..., 0::2] *= neww / w
             target['boxes'][..., 1::2] *= newh / h

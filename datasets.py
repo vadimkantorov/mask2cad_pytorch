@@ -118,8 +118,8 @@ def collate_fn(batch):
         shape_path      = [b[1]['shape_path']                   for b in batch], 
         mask_path       = [b[1]['mask_path']                    for b in batch], 
         category        = [b[1]['category']                     for b in batch],
-        image_width_height = torch.tensor([b[1]['image_width_height']   for b in batch], dtype = torch.int16),
-        image_width_height_resized = torch.tensor([b[1].get('image_width_height_resized', b[1]['image_width_height']) for b in batch], dtype = torch.int16),
+        image_height_width = torch.tensor([b[1]['image_height_width']   for b in batch], dtype = torch.int16),
+        image_height_width_resized = torch.tensor([b[1].get('image_height_width_resized', b[1]['image_height_width']) for b in batch], dtype = torch.int16),
 
         num_boxes       = torch.tensor([len(b[1]['boxes'])      for b in batch]),
         boxes           = stack_jagged([b[1]['boxes']           for b in batch]),
