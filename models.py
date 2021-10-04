@@ -6,19 +6,21 @@ import torch.nn.functional as F
 import torchvision
 
 import quat
+import utils
 
 class ShapeRetrieval(nn.Module):
-    def __init__(self, data_loader, rendered_view_encoder):
+    def __init__(self, shape_data_loader, rendered_view_encoder):
         super().__init__()
-        self.shape_embedding, self.shape_idx, self.shape_path = zip(*[(rendered_view_encoder(targets['shape_views'].flatten(end_dim = -4)), targets['shape_idx'].repeat(1, targets['shape_views'].shape[-4]).flatten(), [pp for p in targets['shape_path'] for pp in [p] * targets['shape_views'].shape[-4] ]  ) for img, targets in data_loader])
+
+        self.shape_embedding, self.shape_idx, self.shape_path = zip(*[(rendered_view_encoder(targets['shape_views'].flatten(end_dim = -4)), targets['shape_idx'].repeat(1, targets['shape_views'].shape[-4]).flatten(), [pp for p in targets['shape_path'] for pp in [p] * targets['shape_views'].shape[-4] ]  ) for img, targets in shape_data_loader])
         self.shape_embedding, self.shape_idx, self.shape_path = F.normalize(torch.cat(self.shape_embedding), dim = -1), torch.cat(self.shape_idx), [s for b in self.shape_path for s in b]
-    
-    def forward(self, shape_embedding, K = 10):
-        idx = F.normalize(shape_embedding, dim = -1).matmul(self.shape_embedding.t()).topk(K, dim = -1, largest = True).indices
+
+    def forward(self, shape_embedding, topk = 10):
+        idx = F.normalize(shape_embedding, dim = -1).matmul(self.shape_embedding.t()).topk(topk, dim = -1, largest = True).indices.cpu()
         return self.shape_idx[idx], [self.shape_path[i[0]] for i in idx.tolist()]
 
     def synchronize_between_processes(self):
-        pass
+        self.shape_embedding, self.shape_idx, self.shape_path = torch.cat(utils.all_gather(self.shape_embedding)), torch.cat(utils.all_gather(self.shape_idx)), [s for ls in utils.all_gather(self.shape_path) for s in ls] 
 
 class Mask2CAD(nn.Module):
     def __init__(self, *, num_categories = 10, embedding_dim = 256, num_rotation_clusters = 16, shape_embedding_dim = 128, num_detections_per_image = 8, object_rotation_quat = None, **kwargs_backbone):

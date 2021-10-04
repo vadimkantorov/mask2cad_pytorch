@@ -78,10 +78,8 @@ def train_one_epoch(log, tensorboard, epoch, iteration, model, optimizer, train_
 def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_data_loader, evaluator_detection, evaluator_mesh, args, device, K = 10):
     metric_logger = utils.MetricLogger()
     
-    #shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
-    shape_embedding, shape_idx, shape_path = zip(*[(model.rendered_view_encoder(targets['shape_views'].flatten(end_dim = -4)), targets['shape_idx'].repeat(1, targets['shape_views'].shape[-4]).flatten(), [pp for p in targets['shape_path'] for pp in [p] * targets['shape_views'].shape[-4] ]  ) for img, targets in shape_data_loader])
-    shape_embedding, shape_idx, shape_path = F.normalize(torch.cat(shape_embedding), dim = -1), torch.cat(shape_idx), [s for b in shape_path for s in b]
-    shape_embedding, shape_idx, shape_path = torch.cat(utils.all_gather(shape_embedding)), torch.cat(utils.all_gather(shape_idx)), [s for ls in utils.all_gather(shape_path) for s in ls] 
+    shape_retrieval = models.ShapeRetrieval(shape_data_loader, model.rendered_view_encoder)
+    shape_retrieval.synchronize_between_processes()
     
     pred_shape_idx, true_shape_idx = utils.CatTensors(), utils.CatTensors()
     pred_category_idx, true_category_idx = utils.CatTensors(), utils.CatTensors()
@@ -93,8 +91,7 @@ def evaluate(log, tensorboard, epoch, iteration, model, val_data_loader, shape_d
         detections = model(*to_device(images, targets, device = args.device), mode = args.device)
         num_boxes = [len(d['boxes']) for d in detections]
 
-        idx = F.normalize(torch.cat([d['shape_embedding'] for d in detections]), dim = -1).matmul(shape_embedding.t()).topk(K, dim = -1, largest = True).indices.cpu()
-        shape_idx_, shape_path_ = shape_idx[idx], [shape_path[i[0]] for i in idx.tolist()]
+        shape_idx_, shape_path_ = shape_retrieval(torch.cat([d['shape_embedding'] for d in detections]))
         for d, s in zip(detections, split_list(shape_path_, num_boxes)):
             d['shape_path'] = s
             d['segmentation'] = pix3d.mask_to_rle(d['masks'].squeeze(-3) > 0.5)
